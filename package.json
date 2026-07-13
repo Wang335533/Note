@@ -1,0 +1,64 @@
+{
+  "name": "desktop-note",
+  "version": "1.2.6",
+  "description": "A calm, local-first daily note and checklist for the Windows desktop.",
+  "author": "Local",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "desktop:dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "sync:icon": "node scripts/sync-icon.mjs",
+    "build": "npm run sync:icon && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "desktop": "npm run build && electron .",
+    "test": "node --test tests/*.test.cjs",
+    "package:win": "npm run build && electron-builder --win portable",
+    "package:installer": "npm run build && electron-builder --win nsis",
+    "package:fast": "npm run build && electron-builder --win dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@phosphor-icons/core": "2.1.1",
+    "@phosphor-icons/react": "2.1.10",
+    "@vitejs/plugin-react": "5.0.4",
+    "concurrently": "10.0.3",
+    "cross-env": "10.1.0",
+    "electron": "43.1.0",
+    "electron-builder": "26.15.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "sharp": "0.35.3",
+    "vite": "6.4.2",
+    "wait-on": "9.0.10"
+  },
+  "build": {
+    "appId": "local.desktop.note",
+    "productName": "Note",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": ["portable"],
+      "icon": "assets/note.png"
+    },
+    "portable": {
+      "artifactName": "Note-${version}-portable.${ext}"
+    },
+    "nsis": {
+      "artifactName": "Note-${version}-setup.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
