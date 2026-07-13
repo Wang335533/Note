@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 
 const SCHEMA_VERSION = 1;
+const TIME_VALUE_PATTERN = /^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/;
 const DEFAULT_SETTINGS = Object.freeze({
   windowMode: "desktop",
   windowModeVersion: 1,
@@ -42,6 +43,20 @@ function clone(value) {
   return structuredClone(value);
 }
 
+function normalizeTimeRange(value) {
+  if (!value || typeof value !== "object") return null;
+  const start = typeof value.start === "string" ? value.start : "";
+  const end = typeof value.end === "string" ? value.end : "";
+  if (!TIME_VALUE_PATTERN.test(start) || !TIME_VALUE_PATTERN.test(end) || start === end) return null;
+  return { start, end };
+}
+
+function formatTimeRange(value) {
+  const range = normalizeTimeRange(value);
+  if (!range) return "";
+  return `${range.start}–${range.end < range.start ? "次日 " : ""}${range.end}`;
+}
+
 function normalizeTask(task, fallbackOrder = 0) {
   if (!task || typeof task !== "object") return null;
   const text = String(task.text || "").trim();
@@ -52,6 +67,7 @@ function normalizeTask(task, fallbackOrder = 0) {
     section: task.section === "focus" ? "focus" : "today",
     order: Number.isFinite(task.order) ? task.order : fallbackOrder,
     done: Boolean(task.done),
+    timeRange: normalizeTimeRange(task.timeRange),
     createdAt: typeof task.createdAt === "string" ? task.createdAt : new Date().toISOString(),
     completedAt: typeof task.completedAt === "string" ? task.completedAt : null,
   };
@@ -74,6 +90,7 @@ function isPersistedStateShape(raw) {
       if (typeof task.text !== "string" || !task.text.trim()) return false;
       if (!['focus', 'today'].includes(task.section)) return false;
       if (!Number.isFinite(task.order) || typeof task.done !== "boolean") return false;
+      if (task.timeRange !== undefined && task.timeRange !== null && !normalizeTimeRange(task.timeRange)) return false;
     }
   }
   return true;
@@ -180,6 +197,8 @@ function applyOperation(state, operation, now = new Date()) {
     case "task:add": {
       const text = String(operation.text || "").trim();
       if (!text) return next;
+      const timeRange = normalizeTimeRange(operation.timeRange);
+      if (operation.timeRange != null && !timeRange) throw new Error("请选择有效的开始和结束时间");
       const focusCount = day.tasks.filter((task) => task.section === "focus").length;
       let section = operation.section === "today" || operation.section === "focus"
         ? operation.section
@@ -192,6 +211,7 @@ function applyOperation(state, operation, now = new Date()) {
         section,
         order,
         done: false,
+        timeRange,
         createdAt: timestamp,
         completedAt: null,
       });
@@ -215,6 +235,14 @@ function applyOperation(state, operation, now = new Date()) {
       const done = typeof operation.done === "boolean" ? operation.done : !found.task.done;
       found.task.done = done;
       found.task.completedAt = done ? timestamp : null;
+      break;
+    }
+    case "task:time": {
+      const found = getTask(next, operation.id);
+      if (!found) break;
+      const timeRange = normalizeTimeRange(operation.timeRange);
+      if (operation.timeRange != null && !timeRange) throw new Error("请选择有效的开始和结束时间");
+      found.task.timeRange = timeRange;
       break;
     }
     case "task:delete": {
@@ -340,7 +368,10 @@ function markdownForState(state) {
   for (const key of dayKeys) {
     lines.push(`## ${key}`, "");
     const tasks = [...state.days[key].tasks].sort((a, b) => a.order - b.order);
-    for (const task of tasks) lines.push(`- [${task.done ? "x" : " "}] ${task.text}`);
+    for (const task of tasks) {
+      const time = formatTimeRange(task.timeRange);
+      lines.push(`- [${task.done ? "x" : " "}] ${time ? `${time} ` : ""}${task.text}`);
+    }
     lines.push("");
   }
   return lines.join("\n");
@@ -352,8 +383,10 @@ module.exports = {
   applyOperation,
   createInitialState,
   ensureCurrentDay,
+  formatTimeRange,
+  isPersistedStateShape,
   localDayKey,
   markdownForState,
-  isPersistedStateShape,
+  normalizeTimeRange,
   normalizeState,
 };

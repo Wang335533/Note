@@ -7,16 +7,29 @@ function dayKey(date = new Date(), boundaryHour = 4) {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeTimeRange(value) {
+  if (!value || typeof value !== "object") return null;
+  const pattern = /^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/;
+  if (!pattern.test(value.start || "") || !pattern.test(value.end || "") || value.start === value.end) return null;
+  return { start: value.start, end: value.end };
+}
+
+function formatTimeRange(value) {
+  const range = normalizeTimeRange(value);
+  if (!range) return "";
+  return `${range.start}–${range.end < range.start ? "次日 " : ""}${range.end}`;
+}
+
 function makeFixture() {
   const activeDay = dayKey();
   const timestamp = new Date().toISOString();
   const items = [
-    ["整理回归结果", "focus", true],
-    ["修改引言的研究动机", "focus", true],
-    ["核对参考文献", "focus", true],
-    ["更新专利数据", "today", false],
-    ["回复合作者", "today", false],
-    ["整理访谈记录", "today", false],
+    ["整理回归结果", "focus", true, { start: "09:00", end: "10:30" }],
+    ["修改引言的研究动机", "focus", true, null],
+    ["核对参考文献", "focus", true, { start: "23:00", end: "01:00" }],
+    ["更新专利数据", "today", false, { start: "14:00", end: "15:15" }],
+    ["回复合作者", "today", false, null],
+    ["整理访谈记录", "today", false, null],
   ];
   return {
     schemaVersion: 1,
@@ -25,12 +38,13 @@ function makeFixture() {
     days: {
       [activeDay]: {
         key: activeDay,
-        tasks: items.map(([text, section, done], index) => ({
+        tasks: items.map(([text, section, done, timeRange], index) => ({
           id: `fixture-${index + 1}`,
           text,
           section,
           order: section === "focus" ? index : index - 3,
           done,
+          timeRange,
           createdAt: timestamp,
           completedAt: done ? timestamp : null,
           hidden: index === 5,
@@ -103,6 +117,7 @@ function createBrowserApi() {
             section: section === "focus" && focusCount < 3 ? "focus" : "today",
             order: tasks.filter((task) => task.section === section).length,
             done: false,
+            timeRange: normalizeTimeRange(operation.timeRange),
             createdAt: new Date().toISOString(),
             completedAt: null,
           });
@@ -117,6 +132,9 @@ function createBrowserApi() {
             found.done = typeof operation.done === "boolean" ? operation.done : !found.done;
             found.completedAt = found.done ? new Date().toISOString() : null;
           }
+          break;
+        case "task:time":
+          if (found) found.timeRange = normalizeTimeRange(operation.timeRange);
           break;
         case "task:delete":
           if (found) day().tasks = tasks.filter((task) => task.id !== found.id);
@@ -172,7 +190,10 @@ function createBrowserApi() {
     openDataFolder: async () => ({ ok: true }),
     exportMarkdown: async () => {
       const lines = ["# Note", "", `## ${state.activeDay}`, ""];
-      day().tasks.forEach((task) => lines.push(`- [${task.done ? "x" : " "}] ${task.text}`));
+      day().tasks.forEach((task) => {
+        const time = formatTimeRange(task.timeRange);
+        lines.push(`- [${task.done ? "x" : " "}] ${time ? `${time} ` : ""}${task.text}`);
+      });
       const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/markdown" }));
       const anchor = document.createElement("a");
       anchor.href = url;

@@ -53,12 +53,35 @@ const expression = `
   const dayKey = before.state.activeDay;
   const originalTasks = structuredClone(before.state.days[dayKey]?.tasks || []);
 
-  const addResult = await window.noteDesktop.mutate({ type: "task:add", text: "__Note IPC delete smoke__" });
+  const addResult = await window.noteDesktop.mutate({
+    type: "task:add",
+    text: "__Note IPC delete smoke__",
+    timeRange: { start: "09:00", end: "10:15" },
+  });
   if (!addResult.ok) throw new Error(addResult.error || "add failed");
   const added = (addResult.state.days[dayKey]?.tasks || []).find(
     (task) => !originalTasks.some((original) => original.id === task.id),
   );
   if (!added) throw new Error("added task was not returned");
+  if (added.timeRange?.start !== "09:00" || added.timeRange?.end !== "10:15") {
+    throw new Error("added task time range was not returned");
+  }
+
+  const timeResult = await window.noteDesktop.mutate({
+    type: "task:time",
+    id: added.id,
+    timeRange: { start: "23:00", end: "01:00" },
+  });
+  if (!timeResult.ok) throw new Error(timeResult.error || "time edit failed");
+  const timed = (timeResult.state.days[dayKey]?.tasks || []).find((task) => task.id === added.id);
+  if (timed?.timeRange?.start !== "23:00" || timed?.timeRange?.end !== "01:00") {
+    throw new Error("cross-midnight time edit was not returned");
+  }
+
+  const clearTimeResult = await window.noteDesktop.mutate({ type: "task:time", id: added.id, timeRange: null });
+  if (!clearTimeResult.ok) throw new Error(clearTimeResult.error || "time clear failed");
+  const clearedTime = (clearTimeResult.state.days[dayKey]?.tasks || []).find((task) => task.id === added.id);
+  if (clearedTime?.timeRange !== null) throw new Error("cleared task time still exists");
 
   const renameResult = await window.noteDesktop.mutate({
     type: "task:text",
@@ -95,6 +118,7 @@ const expression = `
   const finalTasks = after.state.days[dayKey]?.tasks || [];
   return {
     add: addResult.ok,
+    timeAddEditClear: true,
     rename: renameResult.ok,
     delete: deleteResult.ok,
     clearCompleted,
@@ -117,6 +141,7 @@ if (evaluated.exceptionDetails) {
 
 const result = evaluated.result.value;
 assert.equal(result.add, true);
+assert.equal(result.timeAddEditClear, true);
 assert.equal(result.rename, true);
 assert.equal(result.delete, true);
 assert.equal(result.originalTasksPreserved, true);

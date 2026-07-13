@@ -5,6 +5,7 @@ import {
   CaretDown,
   CaretRight,
   Check,
+  Clock,
   Desktop,
   DotsSixVertical,
   DownloadSimple,
@@ -18,11 +19,38 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { isDesktop, noteApi } from "./api.js";
 
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
 const QUICK_DRAFT_KEY = "desktop-note-quick-draft-v1";
+const QUICK_TIME_RANGE_KEY = "desktop-note-quick-time-range-v1";
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, index) => {
+  const hours = String(Math.floor(index / 4)).padStart(2, "0");
+  const minutes = String((index % 4) * 15).padStart(2, "0");
+  return `${hours}:${minutes}`;
+});
+
+function normalizeTimeRange(value) {
+  if (!value || typeof value !== "object") return null;
+  const pattern = /^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/;
+  if (!pattern.test(value.start || "") || !pattern.test(value.end || "") || value.start === value.end) return null;
+  return { start: value.start, end: value.end };
+}
+
+function formatTimeRange(value) {
+  const range = normalizeTimeRange(value);
+  if (!range) return "";
+  return `${range.start}–${range.end < range.start ? "次日 " : ""}${range.end}`;
+}
+
+function nearestQuarterTime(now = new Date()) {
+  const totalMinutes = now.getHours() * 60 + now.getMinutes();
+  const rounded = Math.ceil(totalMinutes / 15) * 15;
+  const normalized = rounded % (24 * 60);
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+}
 
 function loadQuickDraft() {
   try {
@@ -41,6 +69,23 @@ function keepQuickDraft(value) {
   }
 }
 
+function loadQuickTimeRange() {
+  try {
+    return normalizeTimeRange(JSON.parse(localStorage.getItem(QUICK_TIME_RANGE_KEY) || "null"));
+  } catch {
+    return null;
+  }
+}
+
+function keepQuickTimeRange(value) {
+  try {
+    if (value) localStorage.setItem(QUICK_TIME_RANGE_KEY, JSON.stringify(value));
+    else localStorage.removeItem(QUICK_TIME_RANGE_KEY);
+  } catch {
+    // The pending range still remains in React state when browser storage is unavailable.
+  }
+}
+
 function formatDay(key) {
   const [year, month, day] = key.split("-").map(Number);
   const date = new Date(year, month - 1, day, 12, 0, 0);
@@ -49,6 +94,149 @@ function formatDay(key) {
 
 function sortTasks(tasks) {
   return [...tasks].sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt));
+}
+
+function TimeWheel({ label, value, onChange }) {
+  const selectedRef = useRef(null);
+
+  useLayoutEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: "center" });
+  }, []);
+
+  return (
+    <div className="time-wheel-group">
+      <span className="time-wheel-label">{label}</span>
+      <div className="time-wheel" role="listbox" aria-label={`${label}时间`}>
+        {TIME_OPTIONS.map((option) => (
+          <button
+            key={option}
+            ref={option === value ? selectedRef : null}
+            type="button"
+            role="option"
+            aria-selected={option === value}
+            className={option === value ? "is-selected" : ""}
+            onClick={() => onChange(option)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TimeRangePopover({ anchorRef, value, onClose, onConfirm, onClear, reducedMotion = false }) {
+  const initialValue = normalizeTimeRange(value);
+  const [draft, setDraft] = useState(() => {
+    if (initialValue) return initialValue;
+    const nearest = nearestQuarterTime();
+    return { start: nearest, end: nearest };
+  });
+  const [position, setPosition] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const panelRef = useRef(null);
+  const invalid = draft.start === draft.end;
+  const crossesMidnight = !invalid && draft.end < draft.start;
+
+  const positionPanel = useCallback(() => {
+    const anchor = anchorRef.current;
+    const panel = panelRef.current;
+    if (!anchor || !panel) return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const gutter = 12;
+    const below = anchorRect.bottom + 8;
+    const fitsBelow = below + panelRect.height <= window.innerHeight - gutter;
+    const top = fitsBelow
+      ? below
+      : Math.max(gutter, anchorRect.top - panelRect.height - 8);
+    const centered = anchorRect.left + (anchorRect.width - panelRect.width) / 2;
+    const left = Math.max(gutter, Math.min(centered, window.innerWidth - panelRect.width - gutter));
+    setPosition({ top, left });
+  }, [anchorRef]);
+
+  useLayoutEffect(() => {
+    positionPanel();
+    window.addEventListener("resize", positionPanel);
+    window.addEventListener("scroll", positionPanel, true);
+    return () => {
+      window.removeEventListener("resize", positionPanel);
+      window.removeEventListener("scroll", positionPanel, true);
+    };
+  }, [positionPanel]);
+
+  useEffect(() => {
+    const closeOutside = (event) => {
+      if (panelRef.current?.contains(event.target) || anchorRef.current?.contains(event.target)) return;
+      onClose();
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("pointerdown", closeOutside, true);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [anchorRef, onClose]);
+
+  const commit = async () => {
+    if (invalid || saving) return;
+    setSaving(true);
+    const result = await onConfirm(draft);
+    if (result?.ok === false) setSaving(false);
+    else onClose();
+  };
+
+  const clear = async () => {
+    if (saving) return;
+    setSaving(true);
+    const result = await onClear?.();
+    if (result?.ok === false) setSaving(false);
+    else onClose();
+  };
+
+  return createPortal(
+    <section
+      ref={panelRef}
+      className={`time-popover ${reducedMotion ? "reduce-motion" : ""}`}
+      role="dialog"
+      aria-modal="false"
+      aria-label="选择任务时间段"
+      style={{
+        top: position?.top ?? 12,
+        left: position?.left ?? 12,
+        visibility: position ? "visible" : "hidden",
+      }}
+    >
+      <header className="time-popover-header">
+        <div>
+          <strong>安排时间</strong>
+          <span>{invalid ? `${draft.start}–请选择结束时间` : formatTimeRange(draft)}</span>
+        </div>
+        <button type="button" className="time-close" aria-label="关闭时间选择" onClick={onClose}>
+          <X size={16} aria-hidden="true" />
+        </button>
+      </header>
+      <div className="time-wheels">
+        <TimeWheel label="开始" value={draft.start} onChange={(start) => setDraft((current) => ({ ...current, start }))} />
+        <TimeWheel label="结束" value={draft.end} onChange={(end) => setDraft((current) => ({ ...current, end }))} />
+      </div>
+      <div className="time-popover-note" aria-live="polite">
+        {invalid ? "请选择不同的结束时间" : crossesMidnight ? "结束时间为次日" : "当天结束"}
+      </div>
+      <footer className="time-popover-actions">
+        {initialValue ? (
+          <button type="button" className="time-clear" disabled={saving} onClick={clear}>清除时间</button>
+        ) : <span />}
+        <button type="button" className="time-confirm" disabled={invalid || saving} onClick={commit}>
+          {saving ? "保存中…" : "完成"}
+        </button>
+      </footer>
+    </section>,
+    document.body,
+  );
 }
 
 function AppCheckbox({ checked, onChange, label }) {
@@ -102,51 +290,54 @@ function EditableTaskText({ task, mutate, onDraftState }) {
   }, [mutate, onDraftState, task.id, task.text]);
 
   return (
-    <input
-      className={`task-text ${task.done ? "is-done" : ""}`}
-      value={draft}
-      aria-label={`编辑任务：${task.text}`}
-      spellCheck="false"
-      onChange={(event) => {
-        const value = event.target.value;
-        setDraft(value);
-        onDraftState(task.id, true);
-        clearTimeout(saveTimer.current);
-        if (value.trim()) {
-          saveTimer.current = setTimeout(() => {
-            void save(value);
-          }, 420);
-        }
-      }}
-      onFocus={() => {
-        editing.current = true;
-        canceled.current = false;
-        initialValue.current = task.text;
-        lastSubmitted.current = task.text;
-      }}
-      onBlur={() => {
-        clearTimeout(saveTimer.current);
-        editing.current = false;
-        if (canceled.current) {
-          canceled.current = false;
-          setDraft(task.text);
-          return;
-        }
-        void save(draft);
-      }}
-      onKeyDown={(event) => {
-        if (event.nativeEvent.isComposing) return;
-        if (event.key === "Enter") event.currentTarget.blur();
-        if (event.key === "Escape") {
+    <div className={`task-text-wrap ${task.done ? "is-done" : ""}`}>
+      <input
+        className="task-text"
+        value={draft}
+        aria-label={`编辑任务：${task.text}`}
+        spellCheck="false"
+        onChange={(event) => {
+          const value = event.target.value;
+          setDraft(value);
+          onDraftState(task.id, true);
           clearTimeout(saveTimer.current);
-          canceled.current = true;
-          setDraft(initialValue.current);
-          onDraftState(task.id, false);
-          void save(initialValue.current);
-          event.currentTarget.blur();
-        }
-      }}
-    />
+          if (value.trim()) {
+            saveTimer.current = setTimeout(() => {
+              void save(value);
+            }, 420);
+          }
+        }}
+        onFocus={() => {
+          editing.current = true;
+          canceled.current = false;
+          initialValue.current = task.text;
+          lastSubmitted.current = task.text;
+        }}
+        onBlur={() => {
+          clearTimeout(saveTimer.current);
+          editing.current = false;
+          if (canceled.current) {
+            canceled.current = false;
+            setDraft(task.text);
+            return;
+          }
+          void save(draft);
+        }}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") {
+            clearTimeout(saveTimer.current);
+            canceled.current = true;
+            setDraft(initialValue.current);
+            onDraftState(task.id, false);
+            void save(initialValue.current);
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      <span className="task-strike-ghost" aria-hidden="true">{draft}</span>
+    </div>
   );
 }
 
@@ -162,12 +353,16 @@ function TaskRow({
   onDragEnd,
   onDrop,
   onDraftState,
+  reducedMotion,
   compact = false,
 }) {
   const menuOpen = openMenu === task.id;
+  const [timeOpen, setTimeOpen] = useState(false);
+  const rowRef = useRef(null);
   return (
     <div
-      className={`task-row section-${task.section} ${task.done ? "is-done" : ""} ${compact ? "is-compact" : ""}`}
+      ref={rowRef}
+      className={`task-row section-${task.section} ${task.done ? "is-done" : ""} ${task.timeRange ? "has-time" : ""} ${compact ? "is-compact" : ""}`}
       data-task-id={task.id}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
@@ -180,7 +375,23 @@ function TaskRow({
         label={task.done ? `恢复任务：${task.text}` : `完成任务：${task.text}`}
         onChange={() => onToggle(task)}
       />
-      <EditableTaskText task={task} mutate={mutate} onDraftState={onDraftState} />
+      <div className="task-copy">
+        <EditableTaskText task={task} mutate={mutate} onDraftState={onDraftState} />
+        {task.timeRange ? (
+          <button
+            type="button"
+            className="task-time-tag"
+            aria-label={`修改任务时间：${formatTimeRange(task.timeRange)}`}
+            onClick={() => {
+              setOpenMenu(null);
+              setTimeOpen(true);
+            }}
+          >
+            <Clock size={12} aria-hidden="true" />
+            <span>{formatTimeRange(task.timeRange)}</span>
+          </button>
+        ) : null}
+      </div>
       {!compact ? (
         <div className="task-actions">
           <button
@@ -197,6 +408,13 @@ function TaskRow({
           </button>
           {menuOpen ? (
             <div className="task-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => {
+                setOpenMenu(null);
+                setTimeOpen(true);
+              }}>
+                <Clock size={16} />
+                {task.timeRange ? "修改时间" : "设置时间"}
+              </button>
               <button type="button" role="menuitem" onClick={() => onMove(task)}>
                 {task.section === "focus" ? <ArrowDown size={16} /> : <Star size={16} />}
                 {task.section === "focus" ? "移到今天" : "设为今日三件"}
@@ -208,6 +426,16 @@ function TaskRow({
             </div>
           ) : null}
         </div>
+      ) : null}
+      {timeOpen ? (
+        <TimeRangePopover
+          anchorRef={rowRef}
+          value={task.timeRange}
+          onClose={() => setTimeOpen(false)}
+          onConfirm={(timeRange) => mutate({ type: "task:time", id: task.id, timeRange })}
+          onClear={() => mutate({ type: "task:time", id: task.id, timeRange: null })}
+          reducedMotion={reducedMotion}
+        />
       ) : null}
     </div>
   );
@@ -442,6 +670,8 @@ export function App() {
   const [state, setState] = useState(null);
   const [saveStatus, setSaveStatus] = useState("saved");
   const [newTask, setNewTask] = useState(loadQuickDraft);
+  const [newTaskTimeRange, setNewTaskTimeRange] = useState(loadQuickTimeRange);
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [submittingTask, setSubmittingTask] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -452,6 +682,7 @@ export function App() {
   const [dragging, setDragging] = useState(null);
   const [editingDrafts, setEditingDrafts] = useState(() => new Set());
   const inputRef = useRef(null);
+  const quickTimeTriggerRef = useRef(null);
   const toastTimer = useRef(null);
   const submittingRef = useRef(false);
   const newTaskRef = useRef(newTask);
@@ -552,7 +783,7 @@ export function App() {
     submittingRef.current = true;
     setSubmittingTask(true);
     try {
-      const result = await mutate({ type: "task:add", text });
+      const result = await mutate({ type: "task:add", text, timeRange: newTaskTimeRange });
       if (result.ok) {
         if (newTaskRef.current.trim() === text) {
           newTaskRef.current = "";
@@ -560,6 +791,9 @@ export function App() {
           setNewTask("");
           keepQuickDraft("");
         }
+        setNewTaskTimeRange(null);
+        keepQuickTimeRange(null);
+        setTimePickerOpen(false);
         const resultTasks = result.state?.days?.[result.state.activeDay]?.tasks || [];
         const addedTask = resultTasks.find((task) => !beforeIds.has(task.id));
         setTimeout(() => {
@@ -574,7 +808,7 @@ export function App() {
       submittingRef.current = false;
       setSubmittingTask(false);
     }
-  }, [mutate, newTask, state]);
+  }, [mutate, newTask, newTaskTimeRange, state]);
 
   const activeTasks = useMemo(() => {
     if (!state) return [];
@@ -664,6 +898,7 @@ export function App() {
     onDragEnd: () => setDragging(null),
     onDrop: dropOn,
     onDraftState: setEditingDraftState,
+    reducedMotion: state.settings.reducedMotion,
   };
 
   return (
@@ -673,6 +908,7 @@ export function App() {
         if (!event.target.closest(".task-actions")) setOpenMenu(null);
         if (quickEntryTouched.current
           && !event.target.closest(".quick-entry")
+          && !event.target.closest(".time-popover")
           && newTaskRef.current.trim()) {
           void submitNewTask(false);
         }
@@ -776,7 +1012,8 @@ export function App() {
               setNewTask(value);
               keepQuickDraft(value);
             }}
-            onBlur={() => {
+            onBlur={(event) => {
+              if (event.relatedTarget?.closest?.(".quick-entry, .time-popover")) return;
               if (quickEntryTouched.current && newTask.trim()) void submitNewTask(false);
             }}
             onKeyDown={(event) => {
@@ -786,6 +1023,37 @@ export function App() {
               }
             }}
           />
+          <button
+            ref={quickTimeTriggerRef}
+            type="button"
+            className={`quick-time-trigger ${newTaskTimeRange ? "has-time" : ""}`}
+            aria-label={newTaskTimeRange ? `修改时间：${formatTimeRange(newTaskTimeRange)}` : "为新任务设置时间"}
+            aria-expanded={timePickerOpen}
+            onClick={() => setTimePickerOpen((open) => !open)}
+          >
+            <Clock size={17} aria-hidden="true" />
+            {newTaskTimeRange ? <span>{formatTimeRange(newTaskTimeRange)}</span> : null}
+          </button>
+          {timePickerOpen ? (
+            <TimeRangePopover
+              anchorRef={quickTimeTriggerRef}
+              value={newTaskTimeRange}
+              onClose={() => setTimePickerOpen(false)}
+              onConfirm={(timeRange) => {
+                setNewTaskTimeRange(timeRange);
+                keepQuickTimeRange(timeRange);
+                setTimeout(() => inputRef.current?.focus(), 0);
+                return { ok: true };
+              }}
+              onClear={() => {
+                setNewTaskTimeRange(null);
+                keepQuickTimeRange(null);
+                setTimeout(() => inputRef.current?.focus(), 0);
+                return { ok: true };
+              }}
+              reducedMotion={state.settings.reducedMotion}
+            />
+          ) : null}
         </form>
 
         <footer className="save-status" aria-live="polite">
@@ -794,6 +1062,8 @@ export function App() {
             ? "正在添加…"
             : newTask.trim()
               ? "草稿已保留 · 回车添加"
+              : newTaskTimeRange
+                ? `已选 ${formatTimeRange(newTaskTimeRange)} · 写下任务后添加`
               : saveStatus === "error"
                 ? "保存失败"
                 : editingDrafts.size

@@ -4,6 +4,7 @@ const {
   applyOperation,
   createInitialState,
   ensureCurrentDay,
+  formatTimeRange,
   isPersistedStateShape,
   localDayKey,
   markdownForState,
@@ -47,6 +48,65 @@ test("completion is persisted and can be undone", () => {
   assert.equal(state.days[state.activeDay].tasks[0].done, true);
   state = applyOperation(state, { type: "task:toggle", id: task.id, done: false }, now);
   assert.equal(state.days[state.activeDay].tasks[0].done, false);
+});
+
+test("optional time ranges are saved, edited, cleared, and never reorder tasks", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  let state = createInitialState(now);
+  state = applyOperation(state, {
+    type: "task:add",
+    text: "下午会议",
+    timeRange: { start: "15:00", end: "16:15" },
+  }, now);
+  state = applyOperation(state, { type: "task:add", text: "优先处理" }, now);
+
+  const [meeting, priority] = state.days[state.activeDay].tasks;
+  assert.deepEqual(meeting.timeRange, { start: "15:00", end: "16:15" });
+  assert.equal(priority.timeRange, null);
+  assert.deepEqual(state.days[state.activeDay].tasks.map((task) => task.text), ["下午会议", "优先处理"]);
+
+  state = applyOperation(state, {
+    type: "task:time",
+    id: meeting.id,
+    timeRange: { start: "23:00", end: "01:00" },
+  }, now);
+  assert.equal(formatTimeRange(state.days[state.activeDay].tasks[0].timeRange), "23:00–次日 01:00");
+
+  state = applyOperation(state, { type: "task:time", id: meeting.id, timeRange: null }, now);
+  assert.equal(state.days[state.activeDay].tasks[0].timeRange, null);
+});
+
+test("equal or off-step time ranges are rejected while legacy tasks normalize to no time", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  const initial = createInitialState(now);
+  assert.throws(
+    () => applyOperation(initial, {
+      type: "task:add",
+      text: "无效时段",
+      timeRange: { start: "10:15", end: "10:15" },
+    }, now),
+    /有效的开始和结束时间/,
+  );
+  assert.throws(
+    () => applyOperation(initial, {
+      type: "task:add",
+      text: "错误刻度",
+      timeRange: { start: "10:10", end: "11:00" },
+    }, now),
+    /有效的开始和结束时间/,
+  );
+
+  const legacy = createInitialState(now);
+  legacy.days[legacy.activeDay].tasks.push({
+    id: "legacy-task",
+    text: "旧任务",
+    section: "focus",
+    order: 0,
+    done: false,
+    createdAt: now.toISOString(),
+    completedAt: null,
+  });
+  assert.equal(normalizeState(legacy, now).days[legacy.activeDay].tasks[0].timeRange, null);
 });
 
 test("a new day creates a review instead of silently rolling tasks over", () => {
@@ -154,6 +214,16 @@ test("Markdown export is generated from the same state", () => {
   const markdown = markdownForState(state);
   assert.match(markdown, /## 2026-07-12/);
   assert.match(markdown, /- \[x\] 整理回归结果/);
+});
+
+test("Markdown export includes a cross-midnight time label", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  const state = applyOperation(createInitialState(now), {
+    type: "task:add",
+    text: "夜间写作",
+    timeRange: { start: "23:00", end: "01:00" },
+  }, now);
+  assert.match(markdownForState(state), /23:00–次日 01:00 夜间写作/);
 });
 
 test("a failed disk write does not poison later saves", async () => {

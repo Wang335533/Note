@@ -13,3 +13,7 @@ When implementing from a selected generated mock, treat that image as the source
 - Advanced controls belong in the tray, keyboard shortcuts, or an in-card settings sheet rather than the default card.
 - The workday changes at 04:00. Unfinished tasks are reviewed instead of silently rolling over.
 - The app is local-first and must save every mutation immediately. Desktop and temporary always-on-top modes are both required.
+- Task time ranges are optional, use 24-hour time in 15-minute increments, may overlap or cross midnight, and never change manual task ordering.
+- Time selection stays collapsed behind a clock affordance and opens as a compact two-column popover; it requires explicit confirmation, rejects equal start/end values, and resets after each successful task creation.
+- Existing task times can be edited or cleared. Untimed tasks show no time metadata; completed tasks strike only the task text while the time label merely fades.
+- Motion should feel localized and restrained. Focusing or clicking inside Note must not animate or scale the entire card.
