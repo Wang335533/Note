@@ -9,6 +9,7 @@ const {
   localDayKey,
   markdownForState,
   normalizeState,
+  normalizeWindowBounds,
 } = require("../electron/store.cjs");
 const { createSerializedWriter, selectLatestValidCandidate } = require("../electron/persistence.cjs");
 
@@ -27,6 +28,17 @@ test("the first three tasks become Today Three automatically", () => {
   }
   const tasks = state.days[state.activeDay].tasks;
   assert.deepEqual(tasks.map((task) => task.section), ["focus", "focus", "focus", "today"]);
+});
+
+test("empty task creation is rejected without changing the source state", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  const state = createInitialState(now);
+  assert.throws(
+    () => applyOperation(state, { type: "task:add", text: "   " }, now),
+    /任务内容不能为空/,
+  );
+  assert.equal(state.revision, 0);
+  assert.equal(state.days[state.activeDay].tasks.length, 0);
 });
 
 test("Today Three never accepts a fourth task", () => {
@@ -204,6 +216,43 @@ test("desktop mode is the default and all three window layers are preserved", ()
     value: "floating",
   }, now);
   assert.equal(floating.settings.windowMode, "floating");
+});
+
+test("settings reject invalid values and window bounds keep only finite coordinates", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  const state = createInitialState(now);
+
+  assert.throws(
+    () => applyOperation(state, { type: "settings:set", key: "windowMode", value: "above-everything" }, now),
+    /无效的窗口模式/,
+  );
+  assert.throws(
+    () => applyOperation(state, { type: "settings:set", key: "locked", value: "yes" }, now),
+    /无效的开关设置/,
+  );
+  assert.throws(
+    () => applyOperation(state, { type: "settings:set", key: "windowBounds", value: { x: 10 } }, now),
+    /无效的窗口位置/,
+  );
+
+  const moved = applyOperation(state, {
+    type: "settings:set",
+    key: "windowBounds",
+    value: { x: -120.8, y: 0, ignored: "value" },
+  }, now);
+  assert.deepEqual(moved.settings.windowBounds, { x: -120, y: 0 });
+  assert.deepEqual(normalizeWindowBounds({ x: Infinity, y: 0 }), null);
+
+  const malformed = structuredClone(moved);
+  malformed.settings.windowBounds = { x: "10", y: 20 };
+  assert.equal(isPersistedStateShape(malformed), false);
+});
+
+test("current-day checks reuse the existing state until the date actually changes", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  const state = createInitialState(now);
+  assert.equal(ensureCurrentDay(state, new Date(2026, 6, 12, 23, 0, 0)), state);
+  assert.notEqual(ensureCurrentDay(state, new Date(2026, 6, 13, 10, 0, 0)), state);
 });
 
 test("Markdown export is generated from the same state", () => {

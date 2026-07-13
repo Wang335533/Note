@@ -1192,6 +1192,20 @@ select:focus-visible {
   line-height: 1.4;
 }
 
+.desktop-host-warning {
+  border-color: rgba(217, 119, 87, 0.17);
+  background: rgba(246, 229, 220, 0.56);
+  color: #a45f47;
+}
+
+.desktop-host-warning strong {
+  color: #744b3d;
+}
+
+.desktop-host-warning span {
+  color: #806459;
+}
+
 .shortcut-card > div {
   display: flex;
   flex-direction: column;

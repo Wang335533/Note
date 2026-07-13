@@ -15,6 +15,7 @@ const fsSync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { createBoundedFileLogger } = require("./file-logger.cjs");
 const { isSameDocumentUrl, isTrustedRendererEvent } = require("./ipc-security.cjs");
 const { createSerializedWriter, selectLatestValidCandidate } = require("./persistence.cjs");
 const {
@@ -22,6 +23,7 @@ const {
   createInitialState,
   ensureCurrentDay,
   isPersistedStateShape,
+  localDayKey,
   markdownForState,
   normalizeState,
 } = require("./store.cjs");
@@ -64,6 +66,20 @@ if (!app.isPackaged) {
   app.setPath("userData", devUserData);
 }
 
+const diagnosticLogger = createBoundedFileLogger(
+  path.join(app.getPath("userData"), "note-data", "note-error.log"),
+);
+
+function reportError(context, error) {
+  console.error(context, error);
+  void diagnosticLogger.error(context, error);
+}
+
+function reportWarning(context, detail) {
+  console.warn(context, detail);
+  void diagnosticLogger.warn(context, detail);
+}
+
 const stateWriter = createSerializedWriter(async ({ payload, shouldBackup, durable }) => {
   await fs.mkdir(dataDirectory, { recursive: true });
   if (shouldBackup) {
@@ -81,9 +97,7 @@ const stateWriter = createSerializedWriter(async ({ payload, shouldBackup, durab
     await fs.rm(stateFile, { force: true });
     await fs.rename(tempFile, stateFile);
   }
-}, (error) => {
-  console.error("Previous state write failed; retrying with the latest state:", error);
-});
+}, (error) => reportError("Previous state write failed; retrying with the latest state", error));
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -124,7 +138,7 @@ async function loadState() {
     } catch (error) {
       if (error?.code !== "ENOENT") {
         candidateErrors.push({ file: candidate.file, error });
-        console.warn(`Unable to use ${candidate.file}:`, error.message);
+        reportWarning(`Unable to use ${candidate.file}`, error);
       }
     }
   }
@@ -138,7 +152,7 @@ async function loadState() {
     needsStateMigration = legacyFloatingDefault || raw.settings?.windowModeVersion !== 1;
     state = ensureCurrentDay(normalizeState(raw), new Date());
     primaryCanBeBackedUp = selected.kind === "primary";
-    if (selected.kind !== "primary") console.warn(`Recovered state from ${selected.kind}`);
+    if (selected.kind !== "primary") reportWarning("Recovered state from a fallback candidate", selected.kind);
     return;
   }
 
@@ -190,7 +204,7 @@ async function showWindow({ focusInput = false, settings = false, temporaryForeg
   if (state.settings.locked) {
     state = applyOperation(state, { type: "settings:set", key: "locked", value: false });
     mainWindow.setIgnoreMouseEvents(false);
-    persistState(state).catch(console.error);
+    persistState(state).catch((error) => reportError("Unable to save the unlocked state", error));
     rebuildTrayMenu();
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -211,10 +225,11 @@ function toggleWindow() {
   rebuildTrayMenu();
 }
 
-async function applyWindowMode({ temporaryForeground = false } = {}) {
+async function applyWindowMode({ temporaryForeground = false, persistFallback = true } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const epoch = ++windowModeEpoch;
   const mode = state.settings.windowMode;
+  let finalStatus = "saved";
   nativeModeTransition = true;
   try {
     if (mode === "desktop" && !temporaryForeground) {
@@ -233,15 +248,43 @@ async function applyWindowMode({ temporaryForeground = false } = {}) {
     }
   } catch (error) {
     desktopHostError = error?.message || "无法连接 Windows 桌面层";
-    console.error("Unable to apply the desktop window layer:", error);
+    reportError("Unable to apply the requested window layer", error);
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setAlwaysOnTop(false, "normal");
-      mainWindow.setSkipTaskbar(false);
+      try {
+        mainWindow.setAlwaysOnTop(false, "normal");
+        mainWindow.setSkipTaskbar(false);
+      } catch (fallbackError) {
+        reportError("Unable to restore the normal window layer", fallbackError);
+      }
+    }
+    if (mode !== "normal" && state.settings.windowMode === mode) {
+      state = applyOperation(state, {
+        type: "settings:set",
+        key: "windowMode",
+        value: "normal",
+      });
+      desktopTemporarilyLifted = false;
+      rebuildTrayMenu();
+      if (persistFallback) {
+        const fallbackSnapshot = state;
+        try {
+          await persistState(fallbackSnapshot);
+          if (state.revision === fallbackSnapshot.revision) {
+            sendToRenderer("note:save-status", "saved");
+          }
+        } catch (persistError) {
+          finalStatus = "error";
+          reportError("Unable to save the automatic normal-window fallback", persistError);
+          sendToRenderer("note:save-status", "error");
+        }
+      } else {
+        finalStatus = "saving";
+      }
     }
   } finally {
     if (epoch === windowModeEpoch) {
       nativeModeTransition = false;
-      broadcastState("saved");
+      broadcastState(finalStatus);
     }
   }
 }
@@ -264,10 +307,12 @@ function applyLaunchAtLogin() {
 }
 
 function clampBounds(savedBounds) {
+  const requestedX = Number(savedBounds?.x);
+  const requestedY = Number(savedBounds?.y);
   const display = savedBounds
     ? screen.getDisplayMatching({
-        x: Number(savedBounds.x) || 0,
-        y: Number(savedBounds.y) || 0,
+        x: Number.isFinite(requestedX) ? requestedX : 0,
+        y: Number.isFinite(requestedY) ? requestedY : 0,
         width: WINDOW_WIDTH,
         height: WINDOW_HEIGHT,
       })
@@ -279,8 +324,8 @@ function clampBounds(savedBounds) {
   };
   if (!savedBounds) return fallback;
   return {
-    x: Math.max(area.x, Math.min(Number(savedBounds.x) || fallback.x, area.x + area.width - WINDOW_WIDTH)),
-    y: Math.max(area.y, Math.min(Number(savedBounds.y) || fallback.y, area.y + area.height - WINDOW_HEIGHT)),
+    x: Math.max(area.x, Math.min(Number.isFinite(requestedX) ? requestedX : fallback.x, area.x + area.width - WINDOW_WIDTH)),
+    y: Math.max(area.y, Math.min(Number.isFinite(requestedY) ? requestedY : fallback.y, area.y + area.height - WINDOW_HEIGHT)),
   };
 }
 
@@ -316,7 +361,7 @@ function applyLegacyRoundedShape(window, width, height) {
   try {
     window.setShape(roundedWindowShape(width, height));
   } catch (error) {
-    console.warn("Unable to apply the Windows 10 Note window shape:", error.message);
+    reportWarning("Unable to apply the Windows 10 Note window shape", error);
   }
 }
 
@@ -394,7 +439,7 @@ function createWindow() {
     if (!isAllowedRendererUrl(url)) event.preventDefault();
   });
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
-    console.error("Note renderer stopped:", details?.reason || "unknown reason");
+    reportError("Note renderer stopped", details?.reason || "unknown reason");
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
   });
 
@@ -448,7 +493,7 @@ function createWindow() {
         await persistState(snapshot);
         if (state.revision === snapshot.revision) sendToRenderer("note:save-status", "saved");
       } catch (error) {
-        console.error("Unable to save window position:", error);
+        reportError("Unable to save window position", error);
         sendToRenderer("note:save-status", "error");
       }
     }, 350);
@@ -472,7 +517,7 @@ async function mutate(operation) {
     state = applyOperation(state, operation, new Date());
     broadcastState("saving");
     if (operation.type === "settings:set") {
-      if (operation.key === "windowMode") await applyWindowMode();
+      if (operation.key === "windowMode") await applyWindowMode({ persistFallback: false });
       if (operation.key === "locked") applyLockedState();
       if (operation.key === "launchAtLogin") applyLaunchAtLogin();
       if (["windowMode", "locked", "launchAtLogin"].includes(operation.key)) rebuildTrayMenu();
@@ -687,12 +732,14 @@ async function flushBeforeQuit() {
   sendToRenderer("note:save-status", "saving");
   try {
     await persistState(state, { durable: true });
+    await diagnosticLogger.flush();
     quitFlushComplete = true;
     isQuitting = true;
     cleanupRuntime();
     app.quit();
   } catch (error) {
-    console.error("Unable to save before quit:", error);
+    reportError("Unable to save before quit", error);
+    await diagnosticLogger.flush();
     quitFlushInProgress = false;
     sendToRenderer("note:save-status", "error");
     const options = {
@@ -746,14 +793,16 @@ app.whenReady().then(async () => {
     void persistState(startupSnapshot).then(() => {
       if (state.revision === startupSnapshot.revision) sendToRenderer("note:save-status", "saved");
     }).catch((error) => {
-      console.error("Unable to persist startup state:", error);
+      reportError("Unable to persist startup state", error);
       startupSaveFailed = true;
       sendToRenderer("note:save-status", "error");
     });
   }
   dayTimer = setInterval(async () => {
     if (quitFlushInProgress) return;
-    const next = ensureCurrentDay(state, new Date());
+    const now = new Date();
+    if (localDayKey(now, state.settings.dayBoundaryHour) === state.activeDay) return;
+    const next = ensureCurrentDay(state, now);
     if (next.revision !== state.revision) {
       state = next;
       broadcastState();
@@ -762,13 +811,14 @@ app.whenReady().then(async () => {
         await persistState(snapshot);
         if (state.revision === snapshot.revision) sendToRenderer("note:save-status", "saved");
       } catch (error) {
-        console.error("Unable to save day rollover:", error);
+        reportError("Unable to save day rollover", error);
         sendToRenderer("note:save-status", "error");
       }
     }
   }, 60_000);
-}).catch((error) => {
-  console.error("Note failed to start:", error);
+}).catch(async (error) => {
+  reportError("Note failed to start", error);
+  await diagnosticLogger.flush();
   dialog.showErrorBox("Note 无法启动", `无法初始化窗口或数据目录。\n\n${error?.message || error}`);
   quitFlushComplete = true;
   isQuitting = true;

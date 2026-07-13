@@ -22,6 +22,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { isDesktop, noteApi } from "./api.js";
+import { preferNewestState } from "./state-utils.js";
 
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
 const QUICK_DRAFT_KEY = "desktop-note-quick-draft-v1";
@@ -472,6 +473,7 @@ function Toggle({ checked, onChange, label }) {
 function SettingsSheet({ state, close, mutate, showToast }) {
   const settings = state.settings;
   const shortcutFailures = state.runtime?.shortcutFailures || [];
+  const desktopHostError = state.runtime?.desktopHostError;
 
   const setWindowMode = async (mode) => {
     const result = await noteApi.setWindowMode(mode);
@@ -591,6 +593,16 @@ function SettingsSheet({ state, close, mutate, showToast }) {
           </div>
         ) : null}
 
+        {desktopHostError ? (
+          <div className="shortcut-warning desktop-host-warning" role="status">
+            <WarningCircle size={20} weight="fill" />
+            <div>
+              <strong>窗口层级切换失败</strong>
+              <span>Note 已自动回到普通窗口。你可以重新选择窗口模式，详细原因已写入本地故障日志。</span>
+            </div>
+          </div>
+        ) : null}
+
         <div className="sheet-actions two-up">
           <button type="button" className="secondary-button" onClick={() => noteApi.openDataFolder()}>
             <FolderOpen size={18} /> 数据位置
@@ -688,6 +700,18 @@ export function App() {
   const newTaskRef = useRef(newTask);
   const quickEntryTouched = useRef(false);
   const pendingMutations = useRef(new Set());
+  const completedSectionRef = useRef(null);
+
+  useEffect(() => {
+    if (!completedOpen) return undefined;
+    const frame = requestAnimationFrame(() => {
+      completedSectionRef.current?.scrollIntoView({
+        block: "nearest",
+        behavior: state?.settings?.reducedMotion ? "auto" : "smooth",
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [completedOpen, state?.settings?.reducedMotion]);
 
   const showToast = useCallback((message, actionLabel = null, action = null) => {
     clearTimeout(toastTimer.current);
@@ -710,10 +734,10 @@ export function App() {
   useEffect(() => {
     let active = true;
     noteApi.getState().then((result) => {
-      if (active && result.ok) setState(result.state);
+      if (active && result.ok) setState((current) => preferNewestState(current, result.state));
     });
     const unsubState = noteApi.onState(({ state: next, status }) => {
-      setState(next);
+      setState((current) => preferNewestState(current, next));
       if (status) setSaveStatus(status);
     });
     const unsubSave = noteApi.onSaveStatus(setSaveStatus);
@@ -754,7 +778,7 @@ export function App() {
           showToast(result.error || "操作没有完成");
           return result;
         }
-        if (result.state) setState(result.state);
+        if (result.state) setState((current) => preferNewestState(current, result.state));
         return result;
       })
       .catch((error) => {
@@ -816,15 +840,15 @@ export function App() {
   }, [state]);
 
   const focusTasks = useMemo(
-    () => sortTasks(activeTasks.filter((task) => task.section === "focus" && !task.hidden)),
+    () => sortTasks(activeTasks.filter((task) => task.section === "focus")),
     [activeTasks],
   );
   const todayTasks = useMemo(
-    () => sortTasks(activeTasks.filter((task) => task.section === "today" && !task.hidden && (!task.done || recentlyCompleted.has(task.id)))),
+    () => sortTasks(activeTasks.filter((task) => task.section === "today" && (!task.done || recentlyCompleted.has(task.id)))),
     [activeTasks, recentlyCompleted],
   );
   const completedTasks = useMemo(
-    () => [...activeTasks].filter((task) => task.done && !task.hidden).sort((a, b) => (b.completedAt || "").localeCompare(a.completedAt || "")),
+    () => [...activeTasks].filter((task) => task.done).sort((a, b) => (b.completedAt || "").localeCompare(a.completedAt || "")),
     [activeTasks],
   );
 
@@ -962,7 +986,10 @@ export function App() {
             )}
           </Section>
 
-          <section className={`completed-section ${completedOpen ? "is-open" : ""}`}>
+          <section
+            ref={completedSectionRef}
+            className={`completed-section ${completedOpen ? "is-open" : ""}`}
+          >
             <button
               type="button"
               className="completed-toggle"
