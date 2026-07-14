@@ -19,6 +19,7 @@ When implementing from a selected generated mock, treat that image as the source
 - Motion should feel localized and restrained. Focusing or clicking inside Note must not animate or scale the entire card.
 - Renderer state may accept an equal revision for newer runtime information, but must never move back to a lower persisted revision.
 - Browser preview behavior must stay aligned with the desktop Store, including validation, rollover, ordering, and visible fixture data; preview-only hidden tasks are not allowed.
+- Desktop and browser preview must call the single Store in `shared/store.cjs`; `src/api.js` only owns browser fixture, localStorage, events, and download adaptation.
 - Empty or invalid operations are rejected without changing revision or writing state.
 - If a requested Windows window layer fails, Note falls back to normal-window mode, persists that fallback, and shows a compact non-modal warning in settings.
 - Local diagnostics contain technical failures only, never task text. Keep `note-error.log` at or below 512 KB with at most one `note-error.log.old` rotation.

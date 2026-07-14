@@ -26,7 +26,7 @@ const {
   localDayKey,
   markdownForState,
   normalizeState,
-} = require("./store.cjs");
+} = require("../shared/store.cjs");
 
 const WINDOW_WIDTH = 544;
 const WINDOW_HEIGHT = 854;

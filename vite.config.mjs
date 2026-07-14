@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   optimizeDeps: {
-    include: ["react", "react-dom/client"],
+    include: ["react", "react-dom/client", "desktop-note/store"],
   },
   server: {
     host: "127.0.0.1",

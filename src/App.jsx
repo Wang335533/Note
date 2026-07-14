@@ -21,7 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { isDesktop, noteApi } from "./api.js";
+import { formatTimeRange, isDesktop, normalizeTimeRange, noteApi } from "./api.js";
 import { preferNewestState } from "./state-utils.js";
 
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
@@ -32,19 +32,6 @@ const TIME_OPTIONS = Array.from({ length: 96 }, (_, index) => {
   const minutes = String((index % 4) * 15).padStart(2, "0");
   return `${hours}:${minutes}`;
 });
-
-function normalizeTimeRange(value) {
-  if (!value || typeof value !== "object") return null;
-  const pattern = /^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/;
-  if (!pattern.test(value.start || "") || !pattern.test(value.end || "") || value.start === value.end) return null;
-  return { start: value.start, end: value.end };
-}
-
-function formatTimeRange(value) {
-  const range = normalizeTimeRange(value);
-  if (!range) return "";
-  return `${range.start}–${range.end < range.start ? "次日 " : ""}${range.end}`;
-}
 
 function nearestQuarterTime(now = new Date()) {
   const totalMinutes = now.getHours() * 60 + now.getMinutes();

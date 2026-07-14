@@ -1,5 +1,3 @@
-const crypto = require("node:crypto");
-
 const SCHEMA_VERSION = 1;
 const TIME_VALUE_PATTERN = /^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/;
 const DEFAULT_SETTINGS = Object.freeze({
@@ -43,6 +41,13 @@ function clone(value) {
   return structuredClone(value);
 }
 
+function defaultRandomUUID() {
+  if (typeof globalThis.crypto?.randomUUID !== "function") {
+    throw new Error("当前环境不支持安全 UUID");
+  }
+  return globalThis.crypto.randomUUID();
+}
+
 function normalizeTimeRange(value) {
   if (!value || typeof value !== "object") return null;
   const start = typeof value.start === "string" ? value.start : "";
@@ -64,18 +69,18 @@ function normalizeWindowBounds(value) {
   return { x: Math.trunc(value.x), y: Math.trunc(value.y) };
 }
 
-function normalizeTask(task, fallbackOrder = 0) {
+function normalizeTask(task, fallbackOrder = 0, now = new Date(), randomUUID = defaultRandomUUID) {
   if (!task || typeof task !== "object") return null;
   const text = String(task.text || "").trim();
   if (!text) return null;
   return {
-    id: typeof task.id === "string" ? task.id : crypto.randomUUID(),
+    id: typeof task.id === "string" ? task.id : randomUUID(),
     text,
     section: task.section === "focus" ? "focus" : "today",
     order: Number.isFinite(task.order) ? task.order : fallbackOrder,
     done: Boolean(task.done),
     timeRange: normalizeTimeRange(task.timeRange),
-    createdAt: typeof task.createdAt === "string" ? task.createdAt : new Date().toISOString(),
+    createdAt: typeof task.createdAt === "string" ? task.createdAt : now.toISOString(),
     completedAt: typeof task.completedAt === "string" ? task.completedAt : null,
   };
 }
@@ -106,7 +111,7 @@ function isPersistedStateShape(raw) {
   return true;
 }
 
-function normalizeState(raw, now = new Date()) {
+function normalizeState(raw, now = new Date(), { randomUUID = defaultRandomUUID } = {}) {
   if (!raw || typeof raw !== "object") return createInitialState(now);
   const rawSettings = raw.settings && typeof raw.settings === "object" ? raw.settings : {};
   const settings = {
@@ -129,7 +134,7 @@ function normalizeState(raw, now = new Date()) {
     for (const [key, day] of Object.entries(raw.days)) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) continue;
       const tasks = Array.isArray(day?.tasks)
-        ? day.tasks.map((task, index) => normalizeTask(task, index)).filter(Boolean)
+        ? day.tasks.map((task, index) => normalizeTask(task, index, now, randomUUID)).filter(Boolean)
         : [];
       days[key] = { key, tasks };
       normalizeOrders(days[key]);
@@ -207,9 +212,9 @@ function activeDay(state) {
   return state.days[state.activeDay];
 }
 
-function applyOperation(state, operation, now = new Date()) {
+function applyOperation(state, operation, now = new Date(), { randomUUID = defaultRandomUUID } = {}) {
   if (!operation || typeof operation.type !== "string") throw new Error("无效操作");
-  const next = ensureCurrentDay(normalizeState(state, now), now);
+  const next = ensureCurrentDay(normalizeState(state, now, { randomUUID }), now);
   const day = activeDay(next);
   const timestamp = now.toISOString();
 
@@ -226,7 +231,7 @@ function applyOperation(state, operation, now = new Date()) {
       if (section === "focus" && focusCount >= 3) section = "today";
       const order = day.tasks.filter((task) => task.section === section).length;
       day.tasks.push({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         text,
         section,
         order,
@@ -277,7 +282,7 @@ function applyOperation(state, operation, now = new Date()) {
         ? operation.dayKey
         : next.activeDay;
       if (!next.days[dayKey]) next.days[dayKey] = createDay(dayKey);
-      const restored = normalizeTask(operation.task, next.days[dayKey].tasks.length);
+      const restored = normalizeTask(operation.task, next.days[dayKey].tasks.length, now, randomUUID);
       if (restored && !getTask(next, restored.id)) next.days[dayKey].tasks.push(restored);
       normalizeOrders(next.days[dayKey]);
       break;
@@ -288,7 +293,7 @@ function applyOperation(state, operation, now = new Date()) {
         : next.activeDay;
       if (!next.days[dayKey]) next.days[dayKey] = createDay(dayKey);
       for (const item of Array.isArray(operation.tasks) ? operation.tasks : []) {
-        const restored = normalizeTask(item, next.days[dayKey].tasks.length);
+        const restored = normalizeTask(item, next.days[dayKey].tasks.length, now, randomUUID);
         if (restored && !getTask(next, restored.id)) next.days[dayKey].tasks.push(restored);
       }
       normalizeOrders(next.days[dayKey]);

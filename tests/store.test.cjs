@@ -10,7 +10,7 @@ const {
   markdownForState,
   normalizeState,
   normalizeWindowBounds,
-} = require("../electron/store.cjs");
+} = require("../shared/store.cjs");
 const { createSerializedWriter, selectLatestValidCandidate } = require("../electron/persistence.cjs");
 
 test("04:00 boundary keeps late-night work on the previous day", () => {
@@ -28,6 +28,19 @@ test("the first three tasks become Today Three automatically", () => {
   }
   const tasks = state.days[state.activeDay].tasks;
   assert.deepEqual(tasks.map((task) => task.section), ["focus", "focus", "focus", "today"]);
+});
+
+test("shared Store accepts platform UUID injection without changing its public state shape", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  const state = applyOperation(
+    createInitialState(now),
+    { type: "task:add", text: "跨平台任务" },
+    now,
+    { randomUUID: () => "platform-task-id" },
+  );
+  const task = state.days[state.activeDay].tasks[0];
+  assert.equal(task.id, "platform-task-id");
+  assert.equal(task.createdAt, now.toISOString());
 });
 
 test("empty task creation is rejected without changing the source state", () => {
