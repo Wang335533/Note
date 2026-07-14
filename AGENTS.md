@@ -23,3 +23,6 @@ When implementing from a selected generated mock, treat that image as the source
 - Empty or invalid operations are rejected without changing revision or writing state.
 - If a requested Windows window layer fails, Note falls back to normal-window mode, persists that fallback, and shows a compact non-modal warning in settings.
 - Local diagnostics contain technical failures only, never task text. Keep `note-error.log` at or below 512 KB with at most one `note-error.log.old` rotation.
+- Releases contain only the directly runnable directory and the NSIS installer. Do not ship a self-extracting portable build because its extraction delay is easy to mistake for application startup time.
+- Keep full-card startup motion out of the desktop runtime. Initialize tray and global-shortcut services after the first window reveal, while preserving localized task and popover motion.
+- Keep hardware acceleration enabled by default; visual compositing and responsive interaction take priority over misleading private-memory reductions from disabling the GPU process.

@@ -54,11 +54,15 @@ let windowRecoveryTimer = null;
 let devServerUrl = null;
 let shortcutFailures = [];
 let startupSaveFailed = false;
+let currentSaveStatus = "saved";
 let needsStateMigration = false;
 let desktopTemporarilyLifted = false;
 let nativeModeTransition = false;
 let windowModeEpoch = 0;
 let desktopHostError = null;
+let cachedIcon = null;
+let backgroundServicesStarted = false;
+let backgroundServicesTimer = null;
 
 if (!app.isPackaged) {
   const devUserData = path.join(app.getPath("appData"), "desktop-note-dev");
@@ -107,14 +111,19 @@ function assetPath(...parts) {
 }
 
 function pickIcon() {
+  if (cachedIcon) return cachedIcon;
   for (const name of ["note-tray.png", "note.png", "note.svg"]) {
     const candidate = assetPath(name);
     if (fsSync.existsSync(candidate)) {
       const image = nativeImage.createFromPath(candidate);
-      if (!image.isEmpty()) return image;
+      if (!image.isEmpty()) {
+        cachedIcon = image;
+        return cachedIcon;
+      }
     }
   }
-  return nativeImage.createEmpty();
+  cachedIcon = nativeImage.createEmpty();
+  return cachedIcon;
 }
 
 async function loadState() {
@@ -124,22 +133,30 @@ async function loadState() {
   tempFile = path.join(dataDirectory, "state.json.tmp");
   await fs.mkdir(dataDirectory, { recursive: true });
 
-  const candidates = [];
-  const candidateErrors = [];
-  for (const candidate of [
+  const candidateResults = await Promise.all([
     { kind: "primary", file: stateFile },
     { kind: "temporary", file: tempFile },
     { kind: "backup", file: backupFile },
-  ]) {
+  ].map(async (candidate) => {
     try {
       const raw = JSON.parse(await fs.readFile(candidate.file, "utf8"));
       if (!isPersistedStateShape(raw)) throw new Error("invalid state structure");
-      candidates.push({ ...candidate, raw });
+      return { ...candidate, raw, error: null };
     } catch (error) {
-      if (error?.code !== "ENOENT") {
-        candidateErrors.push({ file: candidate.file, error });
-        reportWarning(`Unable to use ${candidate.file}`, error);
-      }
+      return { ...candidate, raw: null, error };
+    }
+  }));
+
+  const candidates = [];
+  const candidateErrors = [];
+  for (const candidate of candidateResults) {
+    if (!candidate.error) {
+      candidates.push(candidate);
+      continue;
+    }
+    if (candidate.error?.code !== "ENOENT") {
+      candidateErrors.push({ file: candidate.file, error: candidate.error });
+      reportWarning(`Unable to use ${candidate.file}`, candidate.error);
     }
   }
 
@@ -180,7 +197,13 @@ function sendToRenderer(channel, payload) {
 }
 
 function broadcastState(status = "saving") {
+  currentSaveStatus = status;
   sendToRenderer("note:state", { state: publicState(), status });
+}
+
+function sendSaveStatus(status) {
+  currentSaveStatus = status;
+  sendToRenderer("note:save-status", status);
 }
 
 function publicState() {
@@ -229,7 +252,7 @@ async function applyWindowMode({ temporaryForeground = false, persistFallback = 
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const epoch = ++windowModeEpoch;
   const mode = state.settings.windowMode;
-  let finalStatus = "saved";
+  let finalStatus = currentSaveStatus;
   nativeModeTransition = true;
   try {
     if (mode === "desktop" && !temporaryForeground) {
@@ -270,12 +293,12 @@ async function applyWindowMode({ temporaryForeground = false, persistFallback = 
         try {
           await persistState(fallbackSnapshot);
           if (state.revision === fallbackSnapshot.revision) {
-            sendToRenderer("note:save-status", "saved");
+            sendSaveStatus("saved");
           }
         } catch (persistError) {
           finalStatus = "error";
           reportError("Unable to save the automatic normal-window fallback", persistError);
-          sendToRenderer("note:save-status", "error");
+          sendSaveStatus("error");
         }
       } else {
         finalStatus = "saving";
@@ -427,6 +450,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      backgroundThrottling: true,
     },
   });
 
@@ -454,7 +478,8 @@ function createWindow() {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       mainWindow.show();
       if (state.settings.locked) mainWindow.setIgnoreMouseEvents(true, { forward: true });
-      if (startupSaveFailed) sendToRenderer("note:save-status", "error");
+      if (startupSaveFailed) sendSaveStatus("error");
+      setImmediate(startBackgroundServices);
     });
   };
   mainWindow.webContents.once("dom-ready", revealWindow);
@@ -491,10 +516,10 @@ function createWindow() {
       const snapshot = state;
       try {
         await persistState(snapshot);
-        if (state.revision === snapshot.revision) sendToRenderer("note:save-status", "saved");
+        if (state.revision === snapshot.revision) sendSaveStatus("saved");
       } catch (error) {
         reportError("Unable to save window position", error);
-        sendToRenderer("note:save-status", "error");
+        sendSaveStatus("error");
       }
     }, 350);
   });
@@ -524,10 +549,10 @@ async function mutate(operation) {
     }
     const snapshot = state;
     await persistState(snapshot);
-    if (state.revision === snapshot.revision) sendToRenderer("note:save-status", "saved");
+    if (state.revision === snapshot.revision) sendSaveStatus("saved");
     return { ok: true, state: publicState() };
   } catch (error) {
-    sendToRenderer("note:save-status", "error");
+    sendSaveStatus("error");
     return { ok: false, error: error?.message || "操作失败", state: publicState() };
   }
 }
@@ -602,10 +627,24 @@ function createTray() {
   const icon = pickIcon();
   tray = new Tray(icon);
   tray.on("click", () => void showWindow({ temporaryForeground: true }));
-  rebuildTrayMenu();
+}
+
+function startBackgroundServices() {
+  if (backgroundServicesStarted || isQuitting || quitPreparationInProgress || quitFlushInProgress) return;
+  clearTimeout(backgroundServicesTimer);
+  backgroundServicesTimer = null;
+  try {
+    if (!tray) createTray();
+    registerShortcuts();
+    backgroundServicesStarted = true;
+  } catch (error) {
+    reportError("Unable to initialize tray and global shortcuts", error);
+    backgroundServicesTimer = setTimeout(startBackgroundServices, 3000);
+  }
 }
 
 function registerShortcuts() {
+  globalShortcut.unregisterAll();
   shortcutFailures = [];
   const shortcuts = [
     { label: "显示/隐藏", accelerator: SHORTCUT_TOGGLE, action: toggleWindow },
@@ -626,7 +665,7 @@ function registerShortcuts() {
     }
   }
   rebuildTrayMenu();
-  broadcastState("saved");
+  broadcastState(currentSaveStatus);
 }
 
 function isTrustedIpcEvent(event) {
@@ -700,6 +739,7 @@ function captureWindowBoundsInMemory() {
 function cleanupRuntime() {
   clearInterval(dayTimer);
   clearTimeout(boundsTimer);
+  clearTimeout(backgroundServicesTimer);
   clearTimeout(quitPreparationTimer);
   clearTimeout(windowRecoveryTimer);
   globalShortcut.unregisterAll();
@@ -729,7 +769,7 @@ async function flushBeforeQuit() {
   captureWindowBoundsInMemory();
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
   rebuildTrayMenu();
-  sendToRenderer("note:save-status", "saving");
+  sendSaveStatus("saving");
   try {
     await persistState(state, { durable: true });
     await diagnosticLogger.flush();
@@ -741,7 +781,7 @@ async function flushBeforeQuit() {
     reportError("Unable to save before quit", error);
     await diagnosticLogger.flush();
     quitFlushInProgress = false;
-    sendToRenderer("note:save-status", "error");
+    sendSaveStatus("error");
     const options = {
       type: "warning",
       title: "Note 尚未保存",
@@ -783,19 +823,19 @@ app.whenReady().then(async () => {
     || needsStateMigration
     || state.settings.launchAtLogin !== launchAtLogin;
   state.settings.launchAtLogin = launchAtLogin;
+  Menu.setApplicationMenu(null);
   registerIpc();
   createWindow();
-  createTray();
-  registerShortcuts();
+  backgroundServicesTimer = setTimeout(startBackgroundServices, 1500);
   if (needsStartupSave) {
     const startupSnapshot = state;
     broadcastState("saving");
     void persistState(startupSnapshot).then(() => {
-      if (state.revision === startupSnapshot.revision) sendToRenderer("note:save-status", "saved");
+      if (state.revision === startupSnapshot.revision) sendSaveStatus("saved");
     }).catch((error) => {
       reportError("Unable to persist startup state", error);
       startupSaveFailed = true;
-      sendToRenderer("note:save-status", "error");
+      sendSaveStatus("error");
     });
   }
   dayTimer = setInterval(async () => {
@@ -809,10 +849,10 @@ app.whenReady().then(async () => {
       const snapshot = state;
       try {
         await persistState(snapshot);
-        if (state.revision === snapshot.revision) sendToRenderer("note:save-status", "saved");
+        if (state.revision === snapshot.revision) sendSaveStatus("saved");
       } catch (error) {
         reportError("Unable to save day rollover", error);
-        sendToRenderer("note:save-status", "error");
+        sendSaveStatus("error");
       }
     }
   }, 60_000);

@@ -1,6 +1,6 @@
 {
   "name": "desktop-note",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "A calm, local-first daily note and checklist for the Windows desktop.",
   "author": "Local",
   "private": true,
@@ -17,7 +17,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "desktop": "npm run build && electron .",
     "test": "node --test tests/*.test.cjs tests/*.test.mjs",
-    "package:win": "npm run build && electron-builder --win portable",
+    "package:win": "npm run package:installer",
     "package:installer": "npm run build && electron-builder --win nsis",
     "package:fast": "npm run build && electron-builder --win dir"
   },
@@ -50,15 +50,14 @@
       "assets/**/*",
       "package.json"
     ],
+    "electronLanguages": ["zh-CN", "zh-TW", "en-US"],
     "win": {
-      "target": ["portable"],
+      "target": ["nsis"],
       "icon": "assets/note.png"
-    },
-    "portable": {
-      "artifactName": "Note-${version}-portable.${ext}"
     },
     "nsis": {
       "artifactName": "Note-${version}-setup.${ext}",
+      "differentialPackage": false,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
