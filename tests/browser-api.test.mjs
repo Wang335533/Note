@@ -97,6 +97,27 @@ test("browser preview emits saving and saved around a shared-store mutation", as
   assert.equal(result.state.days[result.state.activeDay].tasks[0].createdAt, now.toISOString());
 });
 
+test("browser preview skips storage and save events for a no-op mutation", async () => {
+  const now = new Date("2026-07-14T10:00:00+08:00");
+  const browserWindow = fakeBrowserWindow(createInitialState(now));
+  let writes = 0;
+  const originalSetItem = browserWindow.localStorage.setItem.bind(browserWindow.localStorage);
+  browserWindow.localStorage.setItem = (key, value) => {
+    writes += 1;
+    originalSetItem(key, value);
+  };
+  const browserApi = createBrowserApi(browserWindow, { now: () => now });
+  const statuses = [];
+  browserApi.onSaveStatus((status) => statuses.push(status));
+
+  const result = await browserApi.mutate({ type: "settings:set", key: "activeModule", value: "todo" });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.unchanged, true);
+  assert.equal(writes, 0);
+  assert.deepEqual(statuses, []);
+});
+
 test("browser preview keeps an in-memory mutation visible when storage fails", async () => {
   const now = new Date("2026-07-14T10:00:00+08:00");
   const browserWindow = fakeBrowserWindow(createInitialState(now));

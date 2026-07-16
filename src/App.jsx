@@ -11,7 +11,9 @@ import {
   DownloadSimple,
   FolderOpen,
   Keyboard,
+  MagnifyingGlass,
   Minus,
+  NoteBlank,
   Plus,
   PushPin,
   Star,
@@ -19,10 +21,15 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatTimeRange, isDesktop, normalizeTimeRange, noteApi } from "./api.js";
+import { HistoryReview, SearchOverlay } from "./SearchOverlay.jsx";
 import { preferNewestState } from "./state-utils.js";
+
+const NotesWorkspace = lazy(() => import("./notes/NotesWorkspace.jsx").then((module) => ({
+  default: module.NotesWorkspace,
+})));
 
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
 const QUICK_DRAFT_KEY = "desktop-note-quick-draft-v1";
@@ -341,6 +348,7 @@ function TaskRow({
   onDragEnd,
   onDrop,
   onDraftState,
+  onOpenNote,
   reducedMotion,
   compact = false,
 }) {
@@ -350,7 +358,7 @@ function TaskRow({
   return (
     <div
       ref={rowRef}
-      className={`task-row section-${task.section} ${task.done ? "is-done" : ""} ${task.timeRange ? "has-time" : ""} ${compact ? "is-compact" : ""}`}
+      className={`task-row section-${task.section} ${task.done ? "is-done" : ""} ${task.timeRange ? "has-time" : ""} ${task.noteId ? "has-note-link" : ""} ${compact ? "is-compact" : ""}`}
       data-task-id={task.id}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
@@ -365,19 +373,29 @@ function TaskRow({
       />
       <div className="task-copy">
         <EditableTaskText task={task} mutate={mutate} onDraftState={onDraftState} />
-        {task.timeRange ? (
-          <button
-            type="button"
-            className="task-time-tag"
-            aria-label={`修改任务时间：${formatTimeRange(task.timeRange)}`}
-            onClick={() => {
-              setOpenMenu(null);
-              setTimeOpen(true);
-            }}
-          >
-            <Clock size={12} aria-hidden="true" />
-            <span>{formatTimeRange(task.timeRange)}</span>
-          </button>
+        {task.timeRange || task.noteId ? (
+          <div className="task-meta-line">
+            {task.timeRange ? (
+              <button
+                type="button"
+                className="task-time-tag"
+                aria-label={`修改任务时间：${formatTimeRange(task.timeRange)}`}
+                onClick={() => {
+                  setOpenMenu(null);
+                  setTimeOpen(true);
+                }}
+              >
+                <Clock size={12} aria-hidden="true" />
+                <span>{formatTimeRange(task.timeRange)}</span>
+              </button>
+            ) : null}
+            {task.noteId ? (
+              <button type="button" className="task-note-link" aria-label={`打开“${task.text}”关联的笔记`} onClick={() => onOpenNote?.(task)}>
+                <NoteBlank size={12} aria-hidden="true" />
+                <span>笔记</span>
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
       {!compact ? (
@@ -567,6 +585,7 @@ function SettingsSheet({ state, close, mutate, showToast }) {
             <strong>全局快捷键</strong>
             <span><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>N</kbd> 显示 / 隐藏</span>
             <span><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>Space</kbd> 立即记录</span>
+            <span><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>Shift</kbd><b>+</b><kbd>N</kbd> 新建笔记</span>
           </div>
         </div>
 
@@ -590,6 +609,14 @@ function SettingsSheet({ state, close, mutate, showToast }) {
           </div>
         ) : null}
 
+        <div className="local-storage-card">
+          <FolderOpen size={19} />
+          <div>
+            <strong>本机独立存储</strong>
+            <span>Todo、笔记和图片只保存在这台电脑的当前 Windows 用户目录；不会与其他安装共享。</span>
+          </div>
+        </div>
+
         <div className="sheet-actions two-up">
           <button type="button" className="secondary-button" onClick={() => noteApi.openDataFolder()}>
             <FolderOpen size={18} /> 数据位置
@@ -598,7 +625,7 @@ function SettingsSheet({ state, close, mutate, showToast }) {
             const result = await noteApi.exportMarkdown();
             if (result.ok) showToast("已导出 Markdown");
           }}>
-            <DownloadSimple size={18} /> 导出
+            <DownloadSimple size={18} /> 导出 Todo
           </button>
         </div>
       </section>
@@ -674,6 +701,8 @@ export function App() {
   const [submittingTask, setSubmittingTask] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [historyReview, setHistoryReview] = useState(null);
   const [clearConfirm, setClearConfirm] = useState(false);
   const [openMenu, setOpenMenu] = useState(null);
   const [recentlyCompleted, setRecentlyCompleted] = useState(() => new Set());
@@ -688,6 +717,7 @@ export function App() {
   const quickEntryTouched = useRef(false);
   const pendingMutations = useRef(new Set());
   const completedSectionRef = useRef(null);
+  const notesVisitedRef = useRef(false);
 
   useEffect(() => {
     if (!completedOpen) return undefined;
@@ -744,16 +774,22 @@ export function App() {
       if (event.key === "Escape") {
         setOpenMenu(null);
         setSettingsOpen(false);
+        setSearchOpen(false);
+        setHistoryReview(null);
         setClearConfirm(false);
       }
       if ((event.ctrlKey || event.metaKey) && event.key === ",") {
         event.preventDefault();
         setSettingsOpen(true);
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        if (!state?.pendingRollover) setSearchOpen(true);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [state?.pendingRollover]);
 
   const mutate = useCallback((operation) => {
     setSaveStatus("saving");
@@ -765,6 +801,7 @@ export function App() {
           showToast(result.error || "操作没有完成");
           return result;
         }
+        if (result.unchanged) setSaveStatus("saved");
         if (result.state) setState((current) => preferNewestState(current, result.state));
         return result;
       })
@@ -868,6 +905,31 @@ export function App() {
     await mutate({ type: "task:move", id: task.id, toSection: target, toIndex: 99 });
   }, [mutate]);
 
+  const openLinkedNote = useCallback(async (task) => {
+    const note = state?.notes?.[task.noteId];
+    if (!note) {
+      showToast("关联笔记已不存在");
+      return;
+    }
+    await mutate({
+      type: "notes:navigate",
+      viewId: note.trashedAt ? "trash" : "all",
+      noteId: note.id,
+      pane: "editor",
+    });
+  }, [mutate, showToast, state?.notes]);
+
+  const revealActiveTask = useCallback(async (task) => {
+    if (task.done) setCompletedOpen(true);
+    await mutate({ type: "settings:set", key: "activeModule", value: "todo" });
+    setTimeout(() => {
+      const row = document.querySelector(`[data-task-id="${task.id}"]`);
+      row?.scrollIntoView({ block: "center", behavior: state?.settings?.reducedMotion ? "auto" : "smooth" });
+      row?.classList.add("is-search-highlight");
+      setTimeout(() => row?.classList.remove("is-search-highlight"), 1800);
+    }, 60);
+  }, [mutate, state?.settings?.reducedMotion]);
+
   const onDragStart = useCallback((event, task) => {
     setDragging(task);
     event.dataTransfer.effectAllowed = "move";
@@ -886,6 +948,12 @@ export function App() {
     setDragging(null);
   }, [dragging, mutate]);
 
+  const createBlankNote = useCallback(async () => {
+    const viewId = state?.settings?.notesLastNotebookId;
+    const notebook = viewId ? state?.notebooks?.[viewId] : null;
+    return mutate({ type: "note:add", notebookId: notebook && !notebook.trashedAt ? notebook.id : null });
+  }, [mutate, state]);
+
   if (!state) {
     return (
       <main className={`preview-shell ${isDesktop ? "desktop-runtime" : ""}`}>
@@ -898,6 +966,8 @@ export function App() {
 
   const completedCount = completedTasks.length;
   const totalCount = activeTasks.length;
+  const activeModule = state.settings.activeModule;
+  if (activeModule === "notes") notesVisitedRef.current = true;
   const rowProps = {
     mutate,
     onToggle,
@@ -909,6 +979,7 @@ export function App() {
     onDragEnd: () => setDragging(null),
     onDrop: dropOn,
     onDraftState: setEditingDraftState,
+    onOpenNote: openLinkedNote,
     reducedMotion: state.settings.reducedMotion,
   };
 
@@ -917,7 +988,8 @@ export function App() {
       className={`preview-shell ${isDesktop ? "desktop-runtime" : ""} ${state.settings.reducedMotion ? "reduce-motion" : ""}`}
       onClick={(event) => {
         if (!event.target.closest(".task-actions")) setOpenMenu(null);
-        if (quickEntryTouched.current
+        if (activeModule === "todo"
+          && quickEntryTouched.current
           && !event.target.closest(".quick-entry")
           && !event.target.closest(".time-popover")
           && newTaskRef.current.trim()) {
@@ -928,7 +1000,7 @@ export function App() {
       <div className="note-frame">
         <section
           className={`note-card ${state.settings.reducedTransparency ? "opaque-card" : ""}`}
-          aria-label="Note 今日清单"
+          aria-label={activeModule === "todo" ? "Note 今日清单" : "Note 笔记库"}
           onContextMenu={(event) => {
             event.preventDefault();
             setSettingsOpen(true);
@@ -939,22 +1011,54 @@ export function App() {
             <Asterisk size={18} weight="bold" aria-hidden="true" />
             <span>Note</span>
           </button>
+          <div className="module-switch" role="tablist" aria-label="Note 模块">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeModule === "todo"}
+              className={activeModule === "todo" ? "is-active" : ""}
+              onClick={() => mutate({ type: "settings:set", key: "activeModule", value: "todo" })}
+            >
+              Todo
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeModule === "notes"}
+              className={activeModule === "notes" ? "is-active" : ""}
+              onClick={() => mutate({ type: "settings:set", key: "activeModule", value: "notes" })}
+            >
+              Notes
+            </button>
+          </div>
           <div className="header-tools">
             <div className="window-grip" title="拖动窗口">
               <DotsSixVertical size={20} weight="bold" aria-hidden="true" />
             </div>
-            <button
-              type="button"
-              className="icon-button clear-button"
-              aria-label="清空今天已完成的任务"
-              disabled={!completedCount}
-              onClick={() => setClearConfirm(true)}
-            >
-              <Trash size={22} />
-            </button>
+            {activeModule === "todo" ? (
+              <button
+                type="button"
+                className="icon-button clear-button"
+                aria-label="清空今天已完成的任务"
+                disabled={!completedCount}
+                onClick={() => setClearConfirm(true)}
+              >
+                <Trash size={22} />
+              </button>
+            ) : (
+              <>
+                <button type="button" className="icon-button" aria-label="搜索全部内容" onClick={() => setSearchOpen(true)}>
+                  <MagnifyingGlass size={19} />
+                </button>
+                <button type="button" className="icon-button note-create-button" aria-label="新建笔记" onClick={() => void createBlankNote()}>
+                  <NoteBlank size={20} />
+                </button>
+              </>
+            )}
           </div>
         </header>
 
+        <div className={`module-workspace-slot ${activeModule === "todo" ? "is-active" : ""}`} aria-hidden={activeModule !== "todo"}>
         <div className="date-block">
           <h1>{formatDay(state.activeDay)}</h1>
           <p><strong>{completedCount}</strong><span>/ {totalCount} 已完成</span></p>
@@ -1084,6 +1188,14 @@ export function App() {
                   ? "正在输入，稍后保存…"
                   : saveStatus === "saving" ? "正在保存…" : "已保存"}
         </footer>
+        </div>
+        {notesVisitedRef.current ? (
+          <div className={`module-workspace-slot ${activeModule === "notes" ? "is-active" : ""}`} aria-hidden={activeModule !== "notes"}>
+            <Suspense fallback={<div className="notes-loading" aria-live="polite">正在打开笔记库…</div>}>
+              <NotesWorkspace state={state} mutate={mutate} showToast={showToast} saveStatus={saveStatus} />
+            </Suspense>
+          </div>
+        ) : null}
 
         {toast ? (
           <div className="toast" role="status">
@@ -1123,6 +1235,26 @@ export function App() {
 
         {settingsOpen ? (
           <SettingsSheet state={state} close={() => setSettingsOpen(false)} mutate={mutate} showToast={showToast} />
+        ) : null}
+        {searchOpen ? (
+          <SearchOverlay
+            state={state}
+            close={() => setSearchOpen(false)}
+            mutate={mutate}
+            showToast={showToast}
+            openHistory={(dayKey, taskId) => setHistoryReview({ dayKey, taskId })}
+            revealActiveTask={revealActiveTask}
+          />
+        ) : null}
+        {historyReview ? (
+          <HistoryReview
+            state={state}
+            dayKey={historyReview.dayKey}
+            taskId={historyReview.taskId}
+            close={() => setHistoryReview(null)}
+            mutate={mutate}
+            showToast={showToast}
+          />
         ) : null}
           <RolloverSheet state={state} mutate={mutate} showToast={showToast} />
         </section>

@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  SCHEMA_VERSION,
   applyOperation,
   createInitialState,
   ensureCurrentDay,
@@ -10,6 +11,7 @@ const {
   markdownForState,
   normalizeState,
   normalizeWindowBounds,
+  searchState,
 } = require("../shared/store.cjs");
 const { createSerializedWriter, selectLatestValidCandidate } = require("../electron/persistence.cjs");
 
@@ -332,4 +334,214 @@ test("state recovery rejects structurally invalid JSON and prefers the newest va
 
   assert.equal(selected.kind, "temporary");
   assert.equal(selected.raw.revision, 5);
+});
+
+test("schema v1 migrates to the notes-capable schema without changing Todo content", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  let current = applyOperation(createInitialState(now), { type: "task:add", text: "保留旧清单" }, now);
+  const legacy = structuredClone(current);
+  legacy.schemaVersion = 1;
+  delete legacy.notebooks;
+  delete legacy.notes;
+  delete legacy.settings.activeModule;
+  delete legacy.settings.notesLastNotebookId;
+  delete legacy.settings.notesLastNoteId;
+  delete legacy.settings.notesPane;
+  delete legacy.settings.resumeModuleAfterRollover;
+
+  assert.equal(isPersistedStateShape(legacy), true);
+  const migrated = normalizeState(legacy, now);
+  assert.equal(migrated.schemaVersion, SCHEMA_VERSION);
+  assert.equal(migrated.days[migrated.activeDay].tasks[0].text, "保留旧清单");
+  assert.deepEqual(migrated.notebooks, {});
+  assert.deepEqual(migrated.notes, {});
+  assert.equal(migrated.settings.activeModule, "todo");
+});
+
+test("notebooks and Markdown notes are created, moved, pinned, and updated deterministically", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  const later = new Date(2026, 6, 12, 15, 0, 0);
+  let state = applyOperation(
+    createInitialState(now),
+    { type: "notebook:add", name: "研究" },
+    now,
+    { randomUUID: () => "notebook-research" },
+  );
+  state = applyOperation(
+    state,
+    { type: "note:add", notebookId: "notebook-research" },
+    now,
+    { randomUUID: () => "note-identification" },
+  );
+  state = applyOperation(state, {
+    type: "note:update",
+    id: "note-identification",
+    title: "识别策略",
+    body: "## 主要假设\n\n平行趋势。",
+  }, later);
+  state = applyOperation(state, { type: "note:pin", id: "note-identification", pinned: true }, later);
+
+  const notebook = state.notebooks["notebook-research"];
+  const note = state.notes["note-identification"];
+  assert.equal(notebook.name, "研究");
+  assert.equal(note.notebookId, notebook.id);
+  assert.equal(note.title, "识别策略");
+  assert.match(note.body, /平行趋势/);
+  assert.equal(note.updatedAt, later.toISOString());
+  assert.equal(note.pinnedAt, later.toISOString());
+  assert.deepEqual(note.attachments, []);
+});
+
+test("a trashed notebook supports individual restore before whole-notebook restore", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  let state = applyOperation(
+    createInitialState(now),
+    { type: "notebook:add", name: "项目甲" },
+    now,
+    { randomUUID: () => "notebook-a" },
+  );
+  state = applyOperation(state, { type: "note:add", notebookId: "notebook-a", title: "笔记一" }, now, {
+    randomUUID: () => "note-one",
+  });
+  state = applyOperation(state, { type: "note:add", notebookId: "notebook-a", title: "笔记二" }, now, {
+    randomUUID: () => "note-two",
+  });
+  state = applyOperation(state, { type: "notebook:trash", id: "notebook-a" }, now);
+
+  assert.ok(state.notebooks["notebook-a"].trashedAt);
+  assert.ok(state.notes["note-one"].trashedAt);
+  assert.ok(state.notes["note-two"].trashedAt);
+
+  state = applyOperation(state, { type: "note:restore", id: "note-one" }, now);
+  assert.equal(state.notes["note-one"].notebookId, null);
+  assert.equal(state.notes["note-one"].trashedAt, null);
+
+  state = applyOperation(state, { type: "notebook:restore", id: "notebook-a" }, now);
+  assert.equal(state.notebooks["notebook-a"].trashedAt, null);
+  assert.equal(state.notes["note-two"].notebookId, "notebook-a");
+  assert.equal(state.notes["note-two"].trashedAt, null);
+  assert.equal(state.notes["note-one"].notebookId, null);
+});
+
+test("permanently deleting a linked note clears task backlinks without deleting the task", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  let state = applyOperation(createInitialState(now), { type: "note:add", title: "回归记录" }, now, {
+    randomUUID: () => "note-regression",
+  });
+  state = applyOperation(state, {
+    type: "task:add",
+    text: "复查回归",
+    noteId: "note-regression",
+  }, now, { randomUUID: () => "task-review" });
+  state = applyOperation(state, { type: "note:trash", id: "note-regression" }, now);
+  state = applyOperation(state, { type: "note:deletePermanent", id: "note-regression" }, now);
+
+  assert.equal(state.notes["note-regression"], undefined);
+  assert.equal(state.days[state.activeDay].tasks[0].id, "task-review");
+  assert.equal(state.days[state.activeDay].tasks[0].noteId, null);
+});
+
+test("rollover review temporarily routes Notes users to Todo and returns afterward", () => {
+  const dayOne = new Date(2026, 6, 12, 20, 0, 0);
+  const dayTwo = new Date(2026, 6, 13, 10, 0, 0);
+  let state = applyOperation(createInitialState(dayOne), {
+    type: "settings:set",
+    key: "activeModule",
+    value: "notes",
+  }, dayOne);
+  state = applyOperation(state, { type: "task:add", text: "明天复盘" }, dayOne);
+  state = ensureCurrentDay(state, dayTwo);
+
+  assert.equal(state.settings.activeModule, "todo");
+  assert.equal(state.settings.resumeModuleAfterRollover, "notes");
+
+  state = applyOperation(state, { type: "rollover:dismiss" }, dayTwo);
+  assert.equal(state.settings.activeModule, "notes");
+  assert.equal(state.settings.resumeModuleAfterRollover, null);
+});
+
+test("unified search groups notes, open tasks, and completed historical tasks", () => {
+  const dayOne = new Date(2026, 6, 12, 14, 0, 0);
+  const dayTwo = new Date(2026, 6, 13, 14, 0, 0);
+  let state = applyOperation(createInitialState(dayOne), {
+    type: "note:add",
+    title: "平行趋势",
+    body: "事件研究图的解释",
+  }, dayOne, { randomUUID: () => "note-search" });
+  state = applyOperation(state, { type: "task:add", text: "绘制事件研究图" }, dayOne, {
+    randomUUID: () => "task-search-done",
+  });
+  state = applyOperation(state, { type: "task:toggle", id: "task-search-done", done: true }, dayOne);
+  state = ensureCurrentDay(state, dayTwo);
+  state = applyOperation(state, { type: "rollover:dismiss" }, dayTwo);
+  state = applyOperation(state, { type: "task:add", text: "检查事件研究设定" }, dayTwo, {
+    randomUUID: () => "task-search-open",
+  });
+
+  const results = searchState(state, "事件研究");
+  assert.deepEqual(results.notes.map((item) => item.id), ["note-search"]);
+  assert.deepEqual(results.openTasks.map((item) => item.id), ["task-search-open"]);
+  assert.deepEqual(results.completedTasks.map((item) => item.id), ["task-search-done"]);
+  assert.equal(results.completedTasks[0].dayKey, "2026-07-12");
+});
+
+test("notes navigation changes module, view, selection, and pane atomically", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  let state = applyOperation(createInitialState(now), { type: "notebook:add", name: "研究" }, now, {
+    randomUUID: () => "notebook-nav",
+  });
+  state = applyOperation(state, { type: "note:add", notebookId: "notebook-nav", title: "导航目标" }, now, {
+    randomUUID: () => "note-nav",
+  });
+  state = applyOperation(state, { type: "settings:set", key: "activeModule", value: "todo" }, now);
+  const revision = state.revision;
+
+  state = applyOperation(state, {
+    type: "notes:navigate",
+    viewId: "notebook-nav",
+    noteId: "note-nav",
+    pane: "editor",
+  }, now);
+
+  assert.equal(state.revision, revision + 1);
+  assert.deepEqual({
+    activeModule: state.settings.activeModule,
+    viewId: state.settings.notesLastNotebookId,
+    noteId: state.settings.notesLastNoteId,
+    pane: state.settings.notesPane,
+  }, {
+    activeModule: "notes",
+    viewId: "notebook-nav",
+    noteId: "note-nav",
+    pane: "editor",
+  });
+  const unchanged = applyOperation(state, {
+    type: "notes:navigate",
+    viewId: "notebook-nav",
+    noteId: "note-nav",
+    pane: "editor",
+  }, now);
+  assert.equal(unchanged.revision, state.revision);
+});
+
+test("unchanged note edits and invalid note targets never increase revision", () => {
+  const now = new Date(2026, 6, 12, 14, 0, 0);
+  let state = applyOperation(createInitialState(now), {
+    type: "note:add",
+    title: "不变",
+    body: "正文",
+  }, now, { randomUUID: () => "note-stable" });
+  const revision = state.revision;
+  state = applyOperation(state, {
+    type: "note:update",
+    id: "note-stable",
+    title: "不变",
+    body: "正文",
+  }, now);
+  assert.equal(state.revision, revision);
+  assert.throws(
+    () => applyOperation(state, { type: "note:update", id: "missing", body: "x" }, now),
+    /未找到笔记/,
+  );
+  assert.equal(state.revision, revision);
 });

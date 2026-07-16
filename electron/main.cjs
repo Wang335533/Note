@@ -6,6 +6,8 @@ const {
   ipcMain,
   Menu,
   nativeImage,
+  net,
+  protocol,
   screen,
   shell,
   Tray,
@@ -14,6 +16,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { randomUUID } = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { createBoundedFileLogger } = require("./file-logger.cjs");
 const { isSameDocumentUrl, isTrustedRendererEvent } = require("./ipc-security.cjs");
@@ -24,6 +27,7 @@ const {
   requestedWindowRectangle,
 } = require("./window-bounds.cjs");
 const {
+  SCHEMA_VERSION,
   applyOperation,
   createInitialState,
   ensureCurrentDay,
@@ -32,11 +36,26 @@ const {
   markdownForState,
   normalizeState,
 } = require("../shared/store.cjs");
+const {
+  createLibraryExportPlan,
+  deriveImportedTitle,
+  imageExtension,
+  noteAssetUrl,
+} = require("../shared/library-files.cjs");
 
 const LEGACY_WINDOW_RADIUS = 10;
 const SHORTCUT_TOGGLE = "CommandOrControl+Alt+N";
 const SHORTCUT_CAPTURE = "CommandOrControl+Alt+Space";
 const SHORTCUT_LOCK = "CommandOrControl+Alt+L";
+const SHORTCUT_NEW_NOTE = "CommandOrControl+Alt+Shift+N";
+const NOTE_ASSET_SCHEME = "note-asset";
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_IMPORTED_MARKDOWN_BYTES = 5 * 1024 * 1024;
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: NOTE_ASSET_SCHEME,
+  privileges: { standard: true, secure: true, supportFetchAPI: true },
+}]);
 
 let mainWindow = null;
 let tray = null;
@@ -45,6 +64,7 @@ let stateFile = null;
 let backupFile = null;
 let tempFile = null;
 let dataDirectory = null;
+let attachmentsDirectory = null;
 let primaryCanBeBackedUp = false;
 let isQuitting = false;
 let quitFlushComplete = false;
@@ -132,10 +152,14 @@ function pickIcon() {
 
 async function loadState() {
   dataDirectory = path.join(app.getPath("userData"), "note-data");
+  attachmentsDirectory = path.join(dataDirectory, "attachments");
   stateFile = path.join(dataDirectory, "state.json");
   backupFile = path.join(dataDirectory, "state.json.bak");
   tempFile = path.join(dataDirectory, "state.json.tmp");
-  await fs.mkdir(dataDirectory, { recursive: true });
+  await Promise.all([
+    fs.mkdir(dataDirectory, { recursive: true }),
+    fs.mkdir(attachmentsDirectory, { recursive: true }),
+  ]);
 
   const candidateResults = await Promise.all([
     { kind: "primary", file: stateFile },
@@ -167,10 +191,11 @@ async function loadState() {
   const selected = selectLatestValidCandidate(candidates, isPersistedStateShape);
   if (selected) {
     const raw = structuredClone(selected.raw);
+    const legacySchema = raw.schemaVersion !== SCHEMA_VERSION;
     const legacyFloatingDefault = raw.settings?.windowMode === "floating"
       && raw.settings?.windowModeVersion !== 1;
     if (legacyFloatingDefault) raw.settings.windowMode = "desktop";
-    needsStateMigration = legacyFloatingDefault || raw.settings?.windowModeVersion !== 1;
+    needsStateMigration = legacySchema || legacyFloatingDefault || raw.settings?.windowModeVersion !== 1;
     state = ensureCurrentDay(normalizeState(raw), new Date());
     primaryCanBeBackedUp = selected.kind === "primary";
     if (selected.kind !== "primary") reportWarning("Recovered state from a fallback candidate", selected.kind);
@@ -194,6 +219,328 @@ function persistState(snapshot = state, { durable = false } = {}) {
   return stateWriter.write({ payload, shouldBackup, durable }).then(() => {
     primaryCanBeBackedUp = true;
   });
+}
+
+function managedAttachmentPath(relativePath) {
+  if (typeof relativePath !== "string" || !/^attachments\/[A-Za-z0-9._-]+$/.test(relativePath)) {
+    throw new Error("Invalid managed attachment path");
+  }
+  const resolved = path.resolve(dataDirectory, ...relativePath.split("/"));
+  const root = `${path.resolve(attachmentsDirectory)}${path.sep}`;
+  if (!resolved.startsWith(root)) throw new Error("Attachment path escaped the managed directory");
+  return resolved;
+}
+
+function attachmentPathMap(snapshot) {
+  const files = new Map();
+  for (const note of Object.values(snapshot?.notes || {})) {
+    for (const attachment of note.attachments || []) {
+      try {
+        files.set(attachment.id, managedAttachmentPath(attachment.relativePath));
+      } catch (error) {
+        reportWarning("Ignored an invalid managed attachment path", error);
+      }
+    }
+  }
+  return files;
+}
+
+async function cleanupRemovedAttachments(beforeSnapshot, afterSnapshot) {
+  const before = attachmentPathMap(beforeSnapshot);
+  const after = attachmentPathMap(afterSnapshot);
+  const removals = [];
+  for (const [id, file] of before) {
+    if (!after.has(id)) removals.push(fs.rm(file, { force: true }));
+  }
+  if (removals.length) await Promise.allSettled(removals);
+}
+
+async function cleanupOrphanedAttachments(snapshot = state) {
+  try {
+    const referenced = new Set(attachmentPathMap(snapshot).values());
+    const entries = await fs.readdir(attachmentsDirectory, { withFileTypes: true });
+    const removals = entries
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.join(attachmentsDirectory, entry.name))
+      .filter((file) => !referenced.has(file))
+      .map((file) => fs.rm(file, { force: true }));
+    if (removals.length) await Promise.allSettled(removals);
+  } catch (error) {
+    reportWarning("Unable to clean orphaned Note images", error);
+  }
+}
+
+function findAttachment(id) {
+  if (typeof id !== "string" || !id) return null;
+  for (const note of Object.values(state?.notes || {})) {
+    const attachment = (note.attachments || []).find((item) => item.id === id);
+    if (attachment) return { note, attachment };
+  }
+  return null;
+}
+
+function registerAttachmentProtocol() {
+  protocol.handle(NOTE_ASSET_SCHEME, async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "local") throw new Error("Invalid attachment host");
+      const id = decodeURIComponent(url.pathname.replace(/^\//, ""));
+      const found = findAttachment(id);
+      if (!found) return new Response("Not found", { status: 404 });
+      return net.fetch(pathToFileURL(managedAttachmentPath(found.attachment.relativePath)).href);
+    } catch (error) {
+      reportWarning("Unable to serve a Note image", error);
+      return new Response("Not found", { status: 404 });
+    }
+  });
+}
+
+function imageTypeFromBytes(buffer) {
+  if (buffer.length >= 8
+    && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47
+    && buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a) return "image/png";
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.length >= 12
+    && buffer.subarray(0, 4).toString("ascii") === "RIFF"
+    && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  return null;
+}
+
+function bufferFromRenderer(value) {
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  if (value instanceof ArrayBuffer) return Buffer.from(new Uint8Array(value));
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  throw new Error("无法读取图片数据");
+}
+
+async function addNoteImage(noteId, payload) {
+  const note = state?.notes?.[noteId];
+  if (!note || note.trashedAt) return { ok: false, error: "未找到笔记", state: publicState() };
+  let file = null;
+  try {
+    const bytes = bufferFromRenderer(payload?.bytes);
+    if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new Error("图片必须小于 20 MB");
+    const mimeType = imageTypeFromBytes(bytes);
+    if (!mimeType || (payload?.mimeType && payload.mimeType !== mimeType)) throw new Error("仅支持 PNG、JPEG 或 WebP 图片");
+    const id = randomUUID();
+    const extension = imageExtension(mimeType);
+    const relativePath = `attachments/${id}${extension}`;
+    file = managedAttachmentPath(relativePath);
+    const temporary = `${file}.tmp`;
+    await fs.writeFile(temporary, bytes, { flush: true });
+    await fs.rename(temporary, file);
+    const attachment = {
+      id,
+      fileName: path.basename(String(payload?.fileName || `image${extension}`)),
+      mimeType,
+      relativePath,
+      createdAt: new Date().toISOString(),
+    };
+    const result = await mutate({ type: "note:attachment:add", id: noteId, attachment });
+    if (!result.ok) {
+      const retained = state?.notes?.[noteId]?.attachments?.some((item) => item.id === id);
+      if (!retained) await fs.rm(file, { force: true });
+      return result;
+    }
+    return { ...result, attachment, markdown: `![${attachment.fileName}](${noteAssetUrl(id)})` };
+  } catch (error) {
+    const retained = file && [...attachmentPathMap(state).values()].includes(file);
+    if (file && !retained) await fs.rm(file, { force: true }).catch(() => {});
+    return { ok: false, error: error?.message || "无法添加图片", state: publicState() };
+  }
+}
+
+function safeChildPath(root, relativePath) {
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(resolvedRoot, ...String(relativePath).split("/"));
+  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error("Export path escaped the selected directory");
+  }
+  return resolved;
+}
+
+async function uniqueExportDirectory(parent) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  const base = `Note-library-${stamp}`;
+  for (let index = 1; index <= 999; index += 1) {
+    const candidate = path.join(parent, index === 1 ? base : `${base}-${index}`);
+    try {
+      await fs.mkdir(candidate, { recursive: false });
+      return candidate;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+  }
+  throw new Error("无法创建唯一的导出目录");
+}
+
+async function exportNotesLibrary() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "选择笔记库导出位置",
+    defaultPath: app.getPath("documents"),
+    properties: ["openDirectory", "createDirectory"],
+    buttonLabel: "导出到这里",
+  });
+  if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
+  const root = await uniqueExportDirectory(result.filePaths[0]);
+  const plan = createLibraryExportPlan(state);
+  try {
+    for (const note of plan.notes) {
+      const destination = safeChildPath(root, note.relativePath);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.writeFile(destination, note.content, "utf8");
+      for (const asset of note.assets) {
+        const source = managedAttachmentPath(asset.sourceRelativePath);
+        const target = safeChildPath(root, asset.relativePath);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.copyFile(source, target);
+      }
+    }
+    return { ok: true, directory: root, noteCount: plan.notes.length };
+  } catch (error) {
+    reportError("Unable to export the notes library", error);
+    return { ok: false, error: error?.message || "导出笔记库失败" };
+  }
+}
+
+function markdownLocalImageUrls(markdown) {
+  const urls = new Set();
+  const pattern = /!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)/g;
+  for (const match of String(markdown || "").matchAll(pattern)) {
+    const value = match[1] || match[2];
+    if (!value || /^(?:https?:|data:|note-asset:|file:)/i.test(value)) continue;
+    urls.add(value);
+  }
+  return [...urls];
+}
+
+async function inspectMarkdownImport(filePaths) {
+  const records = [];
+  let imageBytes = 0;
+  let imageCount = 0;
+  for (const file of filePaths) {
+    const stat = await fs.stat(file);
+    if (!stat.isFile() || stat.size > MAX_IMPORTED_MARKDOWN_BYTES) {
+      throw new Error(`Markdown 文件必须小于 5 MB：${path.basename(file)}`);
+    }
+    const body = await fs.readFile(file, "utf8");
+    const sourceRoot = path.resolve(path.dirname(file));
+    const images = [];
+    for (const rawUrl of markdownLocalImageUrls(body)) {
+      if (imageCount >= 100) break;
+      let decoded;
+      try {
+        decoded = decodeURIComponent(rawUrl);
+      } catch {
+        continue;
+      }
+      if (path.isAbsolute(decoded)) continue;
+      const candidate = path.resolve(sourceRoot, decoded.replaceAll("/", path.sep));
+      if (!candidate.startsWith(`${sourceRoot}${path.sep}`)) continue;
+      try {
+        const imageStat = await fs.stat(candidate);
+        if (!imageStat.isFile() || imageStat.size > MAX_IMAGE_BYTES) continue;
+        if (imageBytes + imageStat.size > 100 * 1024 * 1024) continue;
+        const bytes = await fs.readFile(candidate);
+        const mimeType = imageTypeFromBytes(bytes);
+        if (!mimeType) continue;
+        images.push({ rawUrl, file: candidate, bytes, mimeType });
+        imageBytes += bytes.length;
+        imageCount += 1;
+      } catch {
+        // Broken local image references remain unchanged in the imported Markdown.
+      }
+    }
+    records.push({ file, body, images });
+  }
+  return { records, imageCount };
+}
+
+async function importMarkdownFiles(destinationNotebookId = null) {
+  const selection = await dialog.showOpenDialog(mainWindow, {
+    title: "导入 Markdown 笔记",
+    defaultPath: app.getPath("documents"),
+    filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+    properties: ["openFile", "multiSelections"],
+    buttonLabel: "选择笔记",
+  });
+  if (selection.canceled || !selection.filePaths?.length) return { ok: false, canceled: true };
+
+  let inspected;
+  try {
+    inspected = await inspectMarkdownImport(selection.filePaths);
+  } catch (error) {
+    return { ok: false, error: error?.message || "无法读取 Markdown 文件", state: publicState() };
+  }
+
+  let copyImages = false;
+  if (inspected.imageCount) {
+    const confirmation = await dialog.showMessageBox(mainWindow, {
+      type: "question",
+      title: "同时导入本地图片？",
+      message: `发现 ${inspected.imageCount} 张可复制的本地图片。`,
+      detail: "复制后图片由 Note 管理，并会随整库导出。选择“只导入文字”会保留原 Markdown 路径。",
+      buttons: ["导入并复制图片", "只导入文字", "取消"],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    });
+    if (confirmation.response === 2) return { ok: false, canceled: true };
+    copyImages = confirmation.response === 0;
+  }
+
+  const createdFiles = [];
+  const before = state;
+  let next = state;
+  try {
+    for (const record of inspected.records) {
+      let body = record.body;
+      const attachments = [];
+      if (copyImages) {
+        for (const image of record.images) {
+          const id = randomUUID();
+          const extension = imageExtension(image.mimeType);
+          const relativePath = `attachments/${id}${extension}`;
+          const destination = managedAttachmentPath(relativePath);
+          const temporary = `${destination}.tmp`;
+          await fs.writeFile(temporary, image.bytes, { flush: true });
+          await fs.rename(temporary, destination);
+          createdFiles.push(destination);
+          body = body.split(image.rawUrl).join(noteAssetUrl(id));
+          attachments.push({
+            id,
+            fileName: path.basename(image.file),
+            mimeType: image.mimeType,
+            relativePath,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }
+      const idsBefore = new Set(Object.keys(next.notes));
+      next = applyOperation(next, {
+        type: "note:add",
+        notebookId: destinationNotebookId,
+        title: deriveImportedTitle(path.basename(record.file), body),
+        body,
+      }, new Date());
+      const noteId = Object.keys(next.notes).find((id) => !idsBefore.has(id));
+      if (!noteId) throw new Error("无法创建导入笔记");
+      for (const attachment of attachments) {
+        next = applyOperation(next, { type: "note:attachment:add", id: noteId, attachment }, new Date());
+      }
+    }
+    state = next;
+    broadcastState("saving");
+    await persistState(next);
+    if (state.revision === next.revision) sendSaveStatus("saved");
+    return { ok: true, importedCount: inspected.records.length, state: publicState() };
+  } catch (error) {
+    state = before;
+    await Promise.allSettled(createdFiles.map((file) => fs.rm(file, { force: true })));
+    broadcastState("error");
+    return { ok: false, error: error?.message || "导入 Markdown 失败", state: publicState() };
+  }
 }
 
 function sendToRenderer(channel, payload) {
@@ -250,6 +597,25 @@ function toggleWindow() {
   if (visibleWindow() && mainWindow.isFocused()) mainWindow.hide();
   else void showWindow({ temporaryForeground: true });
   rebuildTrayMenu();
+}
+
+async function createBlankNoteAndShow() {
+  const candidateNotebookId = state?.settings?.notesLastNotebookId;
+  const notebook = candidateNotebookId ? state?.notebooks?.[candidateNotebookId] : null;
+  const result = await mutate({
+    type: "note:add",
+    notebookId: notebook && !notebook.trashedAt ? notebook.id : null,
+  });
+  if (result.ok || state.settings.activeModule === "notes") await showWindow({ temporaryForeground: true });
+  return result;
+}
+
+async function showTodoCapture() {
+  const result = await mutate({ type: "settings:set", key: "activeModule", value: "todo" });
+  if (result.ok || state.settings.activeModule === "todo") {
+    await showWindow({ focusInput: true, temporaryForeground: true });
+  }
+  return result;
 }
 
 async function applyWindowMode({ temporaryForeground = false, persistFallback = true } = {}) {
@@ -537,7 +903,12 @@ async function mutate(operation) {
     return { ok: false, error: "Note 正在退出", state: publicState() };
   }
   try {
-    state = applyOperation(state, operation, new Date());
+    const before = state;
+    const next = applyOperation(before, operation, new Date());
+    state = next;
+    if (next.revision === before.revision) {
+      return { ok: true, unchanged: true, state: publicState() };
+    }
     broadcastState("saving");
     if (operation.type === "settings:set") {
       if (operation.key === "windowMode") await applyWindowMode({ persistFallback: false });
@@ -547,6 +918,7 @@ async function mutate(operation) {
     }
     const snapshot = state;
     await persistState(snapshot);
+    await cleanupRemovedAttachments(before, snapshot);
     if (state.revision === snapshot.revision) sendSaveStatus("saved");
     return { ok: true, state: publicState() };
   } catch (error) {
@@ -565,7 +937,12 @@ function rebuildTrayMenu() {
     {
       label: "快速记录",
       accelerator: SHORTCUT_CAPTURE,
-      click: () => void showWindow({ focusInput: true, temporaryForeground: true }),
+      click: () => void showTodoCapture(),
+    },
+    {
+      label: "新建笔记",
+      accelerator: SHORTCUT_NEW_NOTE,
+      click: () => void createBlankNoteAndShow(),
     },
     ...(shortcutFailures.length ? [{
       label: `快捷键被占用：${shortcutFailures.join("、")}（仍可使用托盘）`,
@@ -618,7 +995,7 @@ function rebuildTrayMenu() {
     },
   ]);
   tray.setContextMenu(menu);
-  tray.setToolTip("Note · 今日清单");
+  tray.setToolTip("Note · Todo 与笔记");
 }
 
 function createTray() {
@@ -646,7 +1023,8 @@ function registerShortcuts() {
   shortcutFailures = [];
   const shortcuts = [
     { label: "显示/隐藏", accelerator: SHORTCUT_TOGGLE, action: toggleWindow },
-    { label: "快速记录", accelerator: SHORTCUT_CAPTURE, action: () => void showWindow({ focusInput: true, temporaryForeground: true }) },
+    { label: "快速记录", accelerator: SHORTCUT_CAPTURE, action: () => void showTodoCapture() },
+    { label: "新建笔记", accelerator: SHORTCUT_NEW_NOTE, action: () => void createBlankNoteAndShow() },
     {
       label: "锁定/解锁",
       accelerator: SHORTCUT_LOCK,
@@ -691,6 +1069,9 @@ function registerIpc() {
     return { ok: true };
   });
   handleTrustedIpc("note:open-data-folder", async () => ({ ok: true, error: await shell.openPath(dataDirectory) }));
+  handleTrustedIpc("note:add-image", (noteId, payload) => addNoteImage(noteId, payload));
+  handleTrustedIpc("note:export-library", () => exportNotesLibrary());
+  handleTrustedIpc("note:import-markdown", (notebookId) => importMarkdownFiles(notebookId));
   handleTrustedIpc("note:export-markdown", async () => {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "导出 Note",
@@ -817,6 +1198,8 @@ app.on("second-instance", () => void showWindow({ temporaryForeground: true }));
 app.whenReady().then(async () => {
   devServerUrl = resolveDevServerUrl();
   await loadState();
+  await cleanupOrphanedAttachments(state);
+  registerAttachmentProtocol();
   const login = app.getLoginItemSettings(app.isPackaged
     ? { path: loginExecutablePath() }
     : { path: process.execPath, args: [app.getAppPath()] });
