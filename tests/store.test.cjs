@@ -231,7 +231,7 @@ test("desktop mode is the default and all three window layers are preserved", ()
   assert.equal(floating.settings.windowMode, "floating");
 });
 
-test("settings reject invalid values and window bounds keep only finite coordinates", () => {
+test("settings reject invalid values and window bounds preserve compatible size data", () => {
   const now = new Date(2026, 6, 12, 14, 0, 0);
   const state = createInitialState(now);
 
@@ -254,10 +254,18 @@ test("settings reject invalid values and window bounds keep only finite coordina
     value: { x: -120.8, y: 0, ignored: "value" },
   }, now);
   assert.deepEqual(moved.settings.windowBounds, { x: -120, y: 0 });
+  const resized = applyOperation(moved, {
+    type: "settings:set",
+    key: "windowBounds",
+    value: { x: -120.8, y: 0, width: 620.9, height: 900.4, ignored: "value" },
+  }, now);
+  assert.deepEqual(resized.settings.windowBounds, { x: -120, y: 0, width: 620, height: 900 });
+  assert.deepEqual(normalizeWindowBounds({ x: 5, y: 8, width: 420 }), null);
+  assert.deepEqual(normalizeWindowBounds({ x: 5, y: 8, width: 0, height: 660 }), null);
   assert.deepEqual(normalizeWindowBounds({ x: Infinity, y: 0 }), null);
 
-  const malformed = structuredClone(moved);
-  malformed.settings.windowBounds = { x: "10", y: 20 };
+  const malformed = structuredClone(resized);
+  malformed.settings.windowBounds = { x: 10, y: 20, width: "620", height: 900 };
   assert.equal(isPersistedStateShape(malformed), false);
 });
 

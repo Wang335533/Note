@@ -26,3 +26,4 @@ When implementing from a selected generated mock, treat that image as the source
 - Releases contain only the directly runnable directory and the NSIS installer. Do not ship a self-extracting portable build because its extraction delay is easy to mistake for application startup time.
 - Keep full-card startup motion out of the desktop runtime. Initialize tray and global-shortcut services after the first window reveal, while preserving localized task and popover motion.
 - Keep hardware acceleration enabled by default; visual compositing and responsive interaction take priority over misleading private-memory reductions from disabling the GPU process.
+- The frameless Note window resizes natively from all four edges and corners without permanent resize controls. Width and height are independent, remembered with position, and constrained to 420×660 through 760×1050 so the card stays useful and visually restrained.

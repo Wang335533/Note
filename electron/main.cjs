@@ -19,6 +19,11 @@ const { createBoundedFileLogger } = require("./file-logger.cjs");
 const { isSameDocumentUrl, isTrustedRendererEvent } = require("./ipc-security.cjs");
 const { createSerializedWriter, selectLatestValidCandidate } = require("./persistence.cjs");
 const {
+  WINDOW_METRICS,
+  fitWindowBounds,
+  requestedWindowRectangle,
+} = require("./window-bounds.cjs");
+const {
   applyOperation,
   createInitialState,
   ensureCurrentDay,
@@ -28,8 +33,6 @@ const {
   normalizeState,
 } = require("../shared/store.cjs");
 
-const WINDOW_WIDTH = 544;
-const WINDOW_HEIGHT = 854;
 const LEGACY_WINDOW_RADIUS = 10;
 const SHORTCUT_TOGGLE = "CommandOrControl+Alt+N";
 const SHORTCUT_CAPTURE = "CommandOrControl+Alt+Space";
@@ -49,6 +52,7 @@ let quitFlushInProgress = false;
 let quitPreparationInProgress = false;
 let quitPreparationTimer = null;
 let boundsTimer = null;
+let legacyShapeTimer = null;
 let dayTimer = null;
 let windowRecoveryTimer = null;
 let devServerUrl = null;
@@ -330,34 +334,11 @@ function applyLaunchAtLogin() {
 }
 
 function clampBounds(savedBounds) {
-  const requestedX = Number(savedBounds?.x);
-  const requestedY = Number(savedBounds?.y);
+  const requested = requestedWindowRectangle(savedBounds);
   const display = savedBounds
-    ? screen.getDisplayMatching({
-        x: Number.isFinite(requestedX) ? requestedX : 0,
-        y: Number.isFinite(requestedY) ? requestedY : 0,
-        width: WINDOW_WIDTH,
-        height: WINDOW_HEIGHT,
-      })
+    ? screen.getDisplayMatching(requested)
     : screen.getPrimaryDisplay();
-  const area = display.workArea;
-  const fallback = {
-    x: area.x + area.width - WINDOW_WIDTH - 28,
-    y: area.y + Math.max(18, area.height - WINDOW_HEIGHT - 28),
-  };
-  if (!savedBounds) return fallback;
-  return {
-    x: Math.max(area.x, Math.min(Number.isFinite(requestedX) ? requestedX : fallback.x, area.x + area.width - WINDOW_WIDTH)),
-    y: Math.max(area.y, Math.min(Number.isFinite(requestedY) ? requestedY : fallback.y, area.y + area.height - WINDOW_HEIGHT)),
-  };
-}
-
-function preferredWindowSize() {
-  const area = screen.getPrimaryDisplay().workArea;
-  return {
-    width: Math.max(420, Math.min(WINDOW_WIDTH, area.width - 16)),
-    height: Math.max(660, Math.min(WINDOW_HEIGHT, area.height - 16)),
-  };
+  return fitWindowBounds(savedBounds, display.workArea);
 }
 
 function needsLegacyRoundedShape() {
@@ -386,6 +367,16 @@ function applyLegacyRoundedShape(window, width, height) {
   } catch (error) {
     reportWarning("Unable to apply the Windows 10 Note window shape", error);
   }
+}
+
+function scheduleLegacyRoundedShape() {
+  if (!needsLegacyRoundedShape() || legacyShapeTimer) return;
+  legacyShapeTimer = setTimeout(() => {
+    legacyShapeTimer = null;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const { width, height } = mainWindow.getBounds();
+    applyLegacyRoundedShape(mainWindow, width, height);
+  }, 16);
 }
 
 function resolveDevServerUrl() {
@@ -419,23 +410,19 @@ function isAllowedRendererUrl(value) {
 }
 
 function createWindow() {
-  const preferred = preferredWindowSize();
-  const position = clampBounds(state.settings.windowBounds);
+  const initialBounds = clampBounds(state.settings.windowBounds);
   const icon = pickIcon();
   mainWindow = new BrowserWindow({
-    width: preferred.width,
-    height: preferred.height,
-    x: position.x,
-    y: position.y,
-    minWidth: preferred.width,
-    minHeight: preferred.height,
-    maxWidth: preferred.width,
-    maxHeight: preferred.height,
+    ...initialBounds,
+    minWidth: WINDOW_METRICS.minWidth,
+    minHeight: WINDOW_METRICS.minHeight,
+    maxWidth: WINDOW_METRICS.maxWidth,
+    maxHeight: WINDOW_METRICS.maxHeight,
     show: false,
     frame: false,
     roundedCorners: true,
     transparent: false,
-    resizable: false,
+    resizable: true,
     movable: true,
     minimizable: true,
     maximizable: false,
@@ -454,7 +441,7 @@ function createWindow() {
     },
   });
 
-  applyLegacyRoundedShape(mainWindow, preferred.width, preferred.height);
+  applyLegacyRoundedShape(mainWindow, initialBounds.width, initialBounds.height);
 
   applyLockedState();
 
@@ -501,16 +488,21 @@ function createWindow() {
     }, 800);
   });
 
-  mainWindow.on("move", () => {
+  const scheduleWindowBoundsSave = () => {
     if (nativeModeTransition) return;
     clearTimeout(boundsTimer);
     boundsTimer = setTimeout(async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
-      const { x, y } = mainWindow.getBounds();
+      const { x, y, width, height } = mainWindow.getBounds();
+      const saved = state.settings.windowBounds;
+      if (saved?.x === x
+        && saved?.y === y
+        && saved?.width === width
+        && saved?.height === height) return;
       state = applyOperation(state, {
         type: "settings:set",
         key: "windowBounds",
-        value: { x, y },
+        value: { x, y, width, height },
       });
       broadcastState();
       const snapshot = state;
@@ -518,10 +510,16 @@ function createWindow() {
         await persistState(snapshot);
         if (state.revision === snapshot.revision) sendSaveStatus("saved");
       } catch (error) {
-        reportError("Unable to save window position", error);
+        reportError("Unable to save window bounds", error);
         sendSaveStatus("error");
       }
     }, 350);
+  };
+
+  mainWindow.on("move", scheduleWindowBoundsSave);
+  mainWindow.on("resize", () => {
+    scheduleLegacyRoundedShape();
+    scheduleWindowBoundsSave();
   });
 
   mainWindow.on("blur", () => {
@@ -726,19 +724,23 @@ function registerIpc() {
 
 function captureWindowBoundsInMemory() {
   if (!state || !mainWindow || mainWindow.isDestroyed()) return;
-  const { x, y } = mainWindow.getBounds();
+  const { x, y, width, height } = mainWindow.getBounds();
   const saved = state.settings.windowBounds;
-  if (saved?.x === x && saved?.y === y) return;
+  if (saved?.x === x
+    && saved?.y === y
+    && saved?.width === width
+    && saved?.height === height) return;
   state = applyOperation(state, {
     type: "settings:set",
     key: "windowBounds",
-    value: { x, y },
+    value: { x, y, width, height },
   });
 }
 
 function cleanupRuntime() {
   clearInterval(dayTimer);
   clearTimeout(boundsTimer);
+  clearTimeout(legacyShapeTimer);
   clearTimeout(backgroundServicesTimer);
   clearTimeout(quitPreparationTimer);
   clearTimeout(windowRecoveryTimer);

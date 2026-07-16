@@ -12,6 +12,7 @@
   --line: rgba(55, 50, 45, 0.12);
   --surface: rgba(250, 249, 247, 0.985);
   --surface-strong: rgba(253, 252, 250, 0.99);
+  --note-gutter: clamp(20px, 4vw, 30px);
 }
 
 * {
@@ -138,7 +139,7 @@ select:focus-visible {
 
 .app-header {
   height: 66px;
-  padding: 16px 25px 7px 27px;
+  padding: 16px calc(var(--note-gutter) + 5px) 7px calc(var(--note-gutter) + 7px);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -220,7 +221,7 @@ select:focus-visible {
 }
 
 .date-block {
-  margin: 0 20px;
+  margin: 0 var(--note-gutter);
   padding: 25px 10px 22px;
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
@@ -255,7 +256,7 @@ select:focus-visible {
 .content-scroll {
   min-height: 0;
   flex: 1 1 auto;
-  margin: 0 20px;
+  margin: 0 var(--note-gutter);
   overflow-x: visible;
   overflow-y: auto;
   scrollbar-width: none;
@@ -581,7 +582,7 @@ select:focus-visible {
 
 .quick-entry {
   height: 66px;
-  margin: 14px 20px 0;
+  margin: 14px var(--note-gutter) 0;
   padding: 0 13px;
   display: flex;
   align-items: center;
@@ -882,7 +883,7 @@ select:focus-visible {
 
 .save-status {
   height: 49px;
-  padding: 13px 29px 14px 54px;
+  padding: 13px calc(var(--note-gutter) + 9px) 14px calc(var(--note-gutter) + 34px);
   display: flex;
   align-items: center;
   gap: 10px;

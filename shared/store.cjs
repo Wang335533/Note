@@ -66,7 +66,20 @@ function normalizeWindowBounds(value) {
   if (value === null || value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   if (!Number.isFinite(value.x) || !Number.isFinite(value.y)) return null;
-  return { x: Math.trunc(value.x), y: Math.trunc(value.y) };
+  const hasWidth = Object.prototype.hasOwnProperty.call(value, "width");
+  const hasHeight = Object.prototype.hasOwnProperty.call(value, "height");
+  if (hasWidth !== hasHeight) return null;
+  const bounds = { x: Math.trunc(value.x), y: Math.trunc(value.y) };
+  if (!hasWidth) return bounds;
+  if (!Number.isFinite(value.width)
+    || !Number.isFinite(value.height)
+    || value.width <= 0
+    || value.height <= 0) return null;
+  return {
+    ...bounds,
+    width: Math.trunc(value.width),
+    height: Math.trunc(value.height),
+  };
 }
 
 function normalizeTask(task, fallbackOrder = 0, now = new Date(), randomUUID = defaultRandomUUID) {
@@ -378,7 +391,7 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
       }
       else if (key === "windowBounds") {
         const bounds = normalizeWindowBounds(operation.value);
-        if (operation.value !== null && !bounds) throw new Error("无效的窗口位置");
+        if (operation.value !== null && !bounds) throw new Error("无效的窗口位置或大小");
         next.settings[key] = bounds;
       }
       else {
