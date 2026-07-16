@@ -8,6 +8,8 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), 
 const mainSource = fs.readFileSync(path.join(root, "electron", "main.cjs"), "utf8");
 const browserApiSource = fs.readFileSync(path.join(root, "src", "api.js"), "utf8");
 const indexHtml = fs.readFileSync(path.join(root, "index.html"), "utf8");
+const viteConfigSource = fs.readFileSync(path.join(root, "vite.config.js"), "utf8");
+const distVerifierSource = fs.readFileSync(path.join(root, "scripts", "verify-dist.mjs"), "utf8");
 
 test("desktop content is rooted in the current installation's per-user data directory", () => {
   assert.match(mainSource, /app\.getPath\("userData"\)/);
@@ -34,4 +36,9 @@ test("release inputs cannot bundle local state, browser storage, or developer fi
   assert.equal(packageJson.build.files.some((entry) => /state|note-data|localStorage|fixture|release/i.test(entry)), false);
   assert.match(browserApiSource, /browserPreviewEnabled = import\.meta\.env\?\.DEV/);
   assert.match(browserApiSource, /browserWindow\?\.noteDesktop\s*\|\|/);
+});
+
+test("packaged renderer uses file-safe relative asset URLs", () => {
+  assert.match(viteConfigSource, /base:\s*["']\.\/["']/);
+  assert.match(distVerifierSource, /root-relative asset URL/);
 });

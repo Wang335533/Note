@@ -18,6 +18,15 @@ const forbiddenBundleMarkers = [
   "整理回归结果",
 ];
 
+const indexHtml = await fs.readFile(path.join(distRoot, "index.html"), "utf8");
+const rootRelativeAsset = indexHtml.match(/(?:src|href)=["']\/(?!\/)/i);
+if (rootRelativeAsset) {
+  throw new Error(
+    `Desktop bundle contains a root-relative asset URL (${rootRelativeAsset[0]}). `
+      + "Packaged file:// windows require relative asset URLs.",
+  );
+}
+
 async function filesBelow(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });
   const files = [];
@@ -41,4 +50,4 @@ for (const file of await filesBelow(distRoot)) {
   }
 }
 
-console.log("Verified desktop bundle contains no local state or development fixtures.");
+console.log("Verified desktop bundle uses file-safe assets and contains no local state or development fixtures.");
