@@ -19,7 +19,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { noteApi } from "../api.js";
 import { FormattingToolbar } from "./FormattingToolbar.jsx";
-import { MarkdownEditor } from "./MarkdownEditor.jsx";
+import { RichTextEditor } from "./RichTextEditor.jsx";
 
 const SYSTEM_VIEWS = {
   all: "全部笔记",
@@ -107,6 +107,8 @@ function NoteListItem({ note, selected, notebookName, onOpen, trashed = false })
 function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, saveStatus, linkedTaskCount, requestPermanentDelete }) {
   const [title, setTitle] = useState(note.title);
   const [body, setBody] = useState(note.body);
+  const [richBody, setRichBody] = useState(note.richBody);
+  const [richBodyKey, setRichBodyKey] = useState(() => JSON.stringify(note.richBody));
   const [selection, setSelection] = useState({ text: "", from: 0, to: 0 });
   const [formatState, setFormatState] = useState({
     bold: false,
@@ -124,18 +126,22 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
   const editorRef = useRef(null);
   const titleRef = useRef(note.title);
   const bodyRef = useRef(note.body);
+  const richBodyRef = useRef(note.richBody);
   const savedTitleRef = useRef(note.title);
-  const savedBodyRef = useRef(note.body);
+  const savedRichBodyKeyRef = useRef(JSON.stringify(note.richBody));
   const titleTimer = useRef(null);
   const bodyTimer = useRef(null);
 
   useEffect(() => {
     setTitle(note.title);
     setBody(note.body);
+    setRichBody(note.richBody);
+    setRichBodyKey(JSON.stringify(note.richBody));
     titleRef.current = note.title;
     bodyRef.current = note.body;
+    richBodyRef.current = note.richBody;
     savedTitleRef.current = note.title;
-    savedBodyRef.current = note.body;
+    savedRichBodyKeyRef.current = JSON.stringify(note.richBody);
     setSelection({ text: "", from: 0, to: 0 });
     setFormatState((current) => ({ ...current, painterActive: false }));
   }, [note.id]);
@@ -145,8 +151,9 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
   }, [note.title]);
 
   useEffect(() => {
-    if (note.body === bodyRef.current) savedBodyRef.current = note.body;
-  }, [note.body]);
+    const nextKey = JSON.stringify(note.richBody);
+    if (nextKey === JSON.stringify(richBodyRef.current)) savedRichBodyKeyRef.current = nextKey;
+  }, [note.richBody]);
 
   useEffect(() => () => {
     clearTimeout(titleTimer.current);
@@ -164,10 +171,11 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
 
   const saveBody = useCallback(async () => {
     clearTimeout(bodyTimer.current);
-    const next = bodyRef.current;
-    if (next === savedBodyRef.current) return { ok: true, unchanged: true };
-    const result = await mutate({ type: "note:update", id: note.id, body: next });
-    if (result.ok) savedBodyRef.current = next;
+    const next = richBodyRef.current;
+    const nextKey = JSON.stringify(next);
+    if (!next || nextKey === savedRichBodyKeyRef.current) return { ok: true, unchanged: true };
+    const result = await mutate({ type: "note:update", id: note.id, richBody: next });
+    if (result.ok) savedRichBodyKeyRef.current = nextKey;
     return result;
   }, [mutate, note.id]);
 
@@ -176,7 +184,7 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
   }, [saveBody, saveTitle]);
 
   const suggestedTitle = !title.trim() ? titleSuggestion(body) : "";
-  const isDirty = title.trim() !== savedTitleRef.current || body !== savedBodyRef.current;
+  const isDirty = title.trim() !== savedTitleRef.current || richBodyKey !== savedRichBodyKeyRef.current;
   const trashed = Boolean(note.trashedAt);
 
   const moveNote = async (notebookId) => {
@@ -279,16 +287,27 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
         ) : null}
       </div>
 
-      <MarkdownEditor
+      <RichTextEditor
         ref={editorRef}
         key={note.id}
         noteId={note.id}
-        value={body}
+        richBody={richBody}
+        legacyMarkdown={note.body}
         readOnly={trashed}
-        onChange={(next) => {
-          bodyRef.current = next;
-          setBody(next);
+        onChange={(next, options = {}) => {
+          bodyRef.current = next.body;
+          richBodyRef.current = next.richBody;
+          setBody(next.body);
+          setRichBody(next.richBody);
+          const nextKey = JSON.stringify(next.richBody);
+          setRichBodyKey(nextKey);
           clearTimeout(bodyTimer.current);
+          if (options.migrated) {
+            void mutate({ type: "note:update", id: note.id, richBody: next.richBody }).then((result) => {
+              if (result.ok) savedRichBodyKeyRef.current = nextKey;
+            });
+            return;
+          }
           bodyTimer.current = setTimeout(() => void saveBody(), 520);
         }}
         onBlur={() => void saveBody()}

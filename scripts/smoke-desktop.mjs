@@ -5,6 +5,9 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import storeModule from "../shared/store.cjs";
+
+const { applyOperation, createInitialState } = storeModule;
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const requestedExecutable = process.argv[2] ? path.resolve(process.argv[2]) : null;
@@ -100,6 +103,16 @@ async function waitFor(send, expression, description) {
   throw new Error(`Timed out waiting for ${description}`);
 }
 
+async function waitForValue(read, description) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const value = await read();
+    if (value) return value;
+    await delay(100);
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "note-desktop-smoke-"));
 const appData = path.join(temporaryRoot, "Roaming");
 const localAppData = path.join(temporaryRoot, "Local");
@@ -109,6 +122,24 @@ await Promise.all([
   fs.mkdir(localAppData, { recursive: true }),
   fs.mkdir(isolatedUserData, { recursive: true }),
 ]);
+
+const legacyNoteId = "legacy-smoke-note";
+const legacyMarker = '<font data-note-font="times-new-roman">Legacy migration text</font>';
+let legacyState = applyOperation(createInitialState(new Date()), {
+  type: "note:add",
+  title: "Legacy migration",
+  body: legacyMarker,
+}, new Date(), { randomUUID: () => legacyNoteId });
+legacyState.schemaVersion = 2;
+delete legacyState.notes[legacyNoteId].richBody;
+legacyState.settings.activeModule = "notes";
+legacyState.settings.notesLastNotebookId = "all";
+legacyState.settings.notesLastNoteId = legacyNoteId;
+legacyState.settings.notesPane = "editor";
+const smokeDataDirectory = path.join(isolatedUserData, "note-data");
+const smokeStatePath = path.join(smokeDataDirectory, "state.json");
+await fs.mkdir(smokeDataDirectory, { recursive: true });
+await fs.writeFile(smokeStatePath, `${JSON.stringify(legacyState, null, 2)}\n`, "utf8");
 
 const port = await reservePort();
 const child = spawn(executable, [...args, `--remote-debugging-port=${port}`], {
@@ -164,8 +195,69 @@ try {
     "the Notes workspace",
   );
 
+  const legacyMigration = await waitFor(
+    cdp.send,
+    `(() => {
+      const editor = document.querySelector('.rich-note-prosemirror');
+      const styled = editor?.querySelector('[style*="Times New Roman"]');
+      if (!editor?.textContent.includes('Legacy migration text') || !styled) return null;
+      return {
+        text: editor.textContent,
+        font: getComputedStyle(styled).fontFamily,
+        rawMarkerVisible: /<font\\s+data-note-font/i.test(editor.textContent),
+      };
+    })()`,
+    "the legacy note migration",
+  );
+  const legacyPersistence = await waitForValue(async () => {
+    const persisted = JSON.parse(await fs.readFile(smokeStatePath, "utf8"));
+    const note = persisted.notes?.[legacyNoteId];
+    if (!note?.richBody || /<\/?font\b/i.test(note.body || "")) return null;
+    return { schemaVersion: persisted.schemaVersion, richBodyType: note.richBody.type };
+  }, "the migrated rich note to reach disk");
+  if (legacyMigration.rawMarkerVisible || !legacyMigration.font.includes("Times New Roman")) {
+    throw new Error(`Unexpected legacy migration state: ${JSON.stringify(legacyMigration)}`);
+  }
+
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="新建笔记"]')?.click()`);
+  await waitFor(
+    cdp.send,
+    `Boolean(document.querySelector('.rich-note-prosemirror[contenteditable="true"]'))`,
+    "the rich note editor",
+  );
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    editor.focus();
+    document.execCommand('insertText', false, 'Packaged Rich Text');
+    document.execCommand('selectAll');
+    document.querySelector('button[aria-label="更多格式"]')?.click();
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.more-format-popover select'))`, "the rich formatting menu");
+  await evaluate(cdp.send, `(() => {
+    const font = document.querySelector('.more-format-popover select');
+    font.value = 'times-new-roman';
+    font.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  const richEditor = await waitFor(
+    cdp.send,
+    `(() => {
+      const editor = document.querySelector('.rich-note-prosemirror');
+      const styled = editor?.querySelector('[style*="Times New Roman"]');
+      if (!editor || !styled) return null;
+      return {
+        text: editor.textContent,
+        font: getComputedStyle(styled).fontFamily,
+        rawMarkerVisible: /<font\\s+data-note-font/i.test(editor.textContent),
+      };
+    })()`,
+    "a real Times New Roman mark",
+  );
+  if (richEditor.rawMarkerVisible || !richEditor.font.includes("Times New Roman")) {
+    throw new Error(`Unexpected rich editor state: ${JSON.stringify(richEditor)}`);
+  }
+
   if (cdp.exceptions.length) throw new Error(`Renderer exceptions: ${cdp.exceptions.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, todo, notes }, null, 2));
+  console.log(JSON.stringify({ ok: true, todo, notes, legacyMigration, legacyPersistence, richEditor }, null, 2));
 } catch (error) {
   if (processOutput.trim()) console.error(processOutput.trim());
   throw error;

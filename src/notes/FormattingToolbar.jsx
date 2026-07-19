@@ -16,7 +16,7 @@ import {
   TextUnderline,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { BLOCK_OPTIONS, FONT_OPTIONS, SIZE_OPTIONS } from "./formatting.js";
+import { BLOCK_OPTIONS, FONT_OPTIONS, SIZE_OPTIONS } from "./rich-text.js";
 
 function FormatButton({ label, active = false, disabled = false, onClick, children }) {
   return (
@@ -48,6 +48,7 @@ export function FormattingToolbar({
   const [linkUrl, setLinkUrl] = useState("");
   const [linkLabel, setLinkLabel] = useState("");
   const linkInputRef = useRef(null);
+  const toolbarShellRef = useRef(null);
 
   useEffect(() => {
     if (!moreOpen && !linkOpen) return undefined;
@@ -60,6 +61,17 @@ export function FormattingToolbar({
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
   }, [editorRef, linkOpen, moreOpen]);
+
+  useEffect(() => {
+    if (!moreOpen && !linkOpen) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      if (toolbarShellRef.current?.contains(event.target)) return;
+      setMoreOpen(false);
+      setLinkOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+  }, [linkOpen, moreOpen]);
 
   useEffect(() => {
     if (linkOpen) requestAnimationFrame(() => linkInputRef.current?.focus());
@@ -114,7 +126,7 @@ export function FormattingToolbar({
   };
 
   return (
-    <div className="format-toolbar-shell">
+    <div ref={toolbarShellRef} className="format-toolbar-shell">
       <div className="format-toolbar" role="toolbar" aria-label="正文格式" onKeyDown={moveToolbarFocus}>
         <FormatButton label="收起格式工具栏" onClick={onToggleCollapsed}>
           <CaretLeft size={14} weight="bold" />
@@ -130,11 +142,6 @@ export function FormattingToolbar({
         <FormatButton label="下划线" active={formatState.underline} onClick={() => applyInline("underline")}><TextUnderline size={16} /></FormatButton>
         <FormatButton label="项目符号" active={formatState.block === "bullet"} onClick={() => applyBlock("bullet")}><ListBullets size={17} /></FormatButton>
         <FormatButton label="编号列表" active={formatState.block === "numbered"} onClick={() => applyBlock("numbered")}><ListNumbers size={17} /></FormatButton>
-        <FormatButton label="待办清单" active={formatState.block === "checklist"} onClick={() => applyBlock("checklist")}><ListChecks size={17} /></FormatButton>
-        <FormatButton label="插入链接" active={linkOpen} onClick={() => {
-          setMoreOpen(false);
-          setLinkOpen((open) => !open);
-        }}><LinkSimple size={16} /></FormatButton>
         <FormatButton label="更多格式" active={moreOpen} onClick={() => {
           setLinkOpen(false);
           setMoreOpen((open) => !open);
@@ -175,6 +182,11 @@ export function FormattingToolbar({
             </select>
           </label>
           <div className="more-format-grid">
+            <FormatButton label="待办清单" active={formatState.block === "checklist"} onClick={() => applyBlock("checklist")}><ListChecks size={17} /></FormatButton>
+            <FormatButton label="插入链接" active={linkOpen} onClick={() => {
+              setMoreOpen(false);
+              setLinkOpen(true);
+            }}><LinkSimple size={16} /></FormatButton>
             <FormatButton label="删除线" active={formatState.strike} onClick={() => applyInline("strike")}><TextStrikethrough size={17} /></FormatButton>
             <FormatButton label="引用" active={formatState.block === "quote"} onClick={() => applyBlock("quote")}><Quotes size={17} /></FormatButton>
             <FormatButton label="行内代码" active={formatState.code} onClick={() => applyInline("code")}><Code size={17} /></FormatButton>

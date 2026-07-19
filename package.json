@@ -1,6 +1,6 @@
 {
   "name": "desktop-note",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "A calm, local-first daily note and checklist for the Windows desktop.",
   "author": "Local",
   "private": true,
@@ -10,7 +10,8 @@
     "./library-files": {
       "import": "./shared/library-files.mjs",
       "require": "./shared/library-files.cjs"
-    }
+    },
+    "./rich-text": "./shared/rich-text.cjs"
   },
   "main": "electron/main.cjs",
   "scripts": {
@@ -27,19 +28,23 @@
     "package:fast": "npm run build && electron-builder --win dir"
   },
   "devDependencies": {
-    "@codemirror/commands": "6.10.4",
-    "@codemirror/lang-markdown": "6.5.1",
-    "@codemirror/language": "6.12.4",
-    "@codemirror/search": "6.7.1",
-    "@codemirror/state": "6.7.1",
-    "@codemirror/view": "6.43.6",
     "@phosphor-icons/core": "2.1.1",
     "@phosphor-icons/react": "2.1.10",
+    "@tiptap/core": "3.28.0",
+    "@tiptap/extension-image": "3.28.0",
+    "@tiptap/extension-task-item": "3.28.0",
+    "@tiptap/extension-task-list": "3.28.0",
+    "@tiptap/extension-text-style": "3.28.0",
+    "@tiptap/extensions": "3.28.0",
+    "@tiptap/html": "3.28.0",
+    "@tiptap/react": "3.28.0",
+    "@tiptap/starter-kit": "3.28.0",
     "@vitejs/plugin-react": "5.0.4",
     "concurrently": "10.0.3",
     "cross-env": "10.1.0",
     "electron": "43.1.0",
     "electron-builder": "26.15.3",
+    "marked": "18.0.6",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "sharp": "0.35.3",

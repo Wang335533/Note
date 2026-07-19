@@ -1,3 +1,7 @@
+import * as richTextModule from "desktop-note/rich-text";
+
+const { stripOwnFormatMarkers } = richTextModule;
+
 export const NOTE_ASSET_URL_PREFIX = "note-asset://local/";
 
 const WINDOWS_RESERVED_NAMES = new Set([
@@ -109,7 +113,7 @@ export function createLibraryExportPlan(state) {
     const preferred = safeFileSegment(note.title || deriveImportedTitle("", note.body), "无标题");
     const noteStem = uniqueSegment(preferred, usedNames, note.id.slice(0, 8));
     const assetDirectory = `${noteStem}.assets`;
-    const content = rewriteInternalAssetUrls(note.body, note, assetDirectory);
+    const content = rewriteInternalAssetUrls(stripOwnFormatMarkers(note.body), note, assetDirectory);
     const assets = (note.attachments || []).map((attachment) => ({
       attachmentId: attachment.id,
       sourceRelativePath: attachment.relativePath,

@@ -1,5 +1,15 @@
-const SCHEMA_VERSION = 2;
+const {
+  emptyRichBody,
+  isRichBody,
+  markdownFromRichBody,
+  normalizeRichBody,
+  plainTextFromRichBody,
+  stripOwnFormatMarkers,
+} = require("./rich-text.cjs");
+
+const SCHEMA_VERSION = 3;
 const LEGACY_SCHEMA_VERSION = 1;
+const MARKDOWN_NOTES_SCHEMA_VERSION = 2;
 const TIME_VALUE_PATTERN = /^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/;
 const NOTE_SYSTEM_VIEWS = Object.freeze(["all", "unfiled", "trash"]);
 const NOTE_IMAGE_MIME_TYPES = Object.freeze(["image/png", "image/jpeg", "image/webp"]);
@@ -153,8 +163,8 @@ function isPersistedAttachmentShape(attachment) {
     && typeof attachment.createdAt === "string";
 }
 
-function isPersistedNoteShape(note, id) {
-  return Boolean(note)
+function isPersistedNoteShape(note, id, schemaVersion = SCHEMA_VERSION) {
+  const common = Boolean(note)
     && typeof note === "object"
     && !Array.isArray(note)
     && note.id === id
@@ -168,11 +178,14 @@ function isPersistedNoteShape(note, id) {
     && isNullableString(note.trashedFromNotebookId)
     && Array.isArray(note.attachments)
     && note.attachments.every(isPersistedAttachmentShape);
+  if (!common) return false;
+  if (schemaVersion === MARKDOWN_NOTES_SCHEMA_VERSION) return note.richBody === undefined;
+  return note.richBody === null || isRichBody(note.richBody);
 }
 
 function isPersistedStateShape(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
-  if (![LEGACY_SCHEMA_VERSION, SCHEMA_VERSION].includes(raw.schemaVersion)) return false;
+  if (![LEGACY_SCHEMA_VERSION, MARKDOWN_NOTES_SCHEMA_VERSION, SCHEMA_VERSION].includes(raw.schemaVersion)) return false;
   if (!Number.isInteger(raw.revision) || raw.revision < 0) return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw.activeDay || "")) return false;
   if (!raw.days || typeof raw.days !== "object" || Array.isArray(raw.days)) return false;
@@ -191,7 +204,7 @@ function isPersistedStateShape(raw) {
   if (!raw.notebooks || typeof raw.notebooks !== "object" || Array.isArray(raw.notebooks)) return false;
   if (!raw.notes || typeof raw.notes !== "object" || Array.isArray(raw.notes)) return false;
   if (!Object.entries(raw.notebooks).every(([id, notebook]) => isPersistedNotebookShape(notebook, id))) return false;
-  if (!Object.entries(raw.notes).every(([id, note]) => isPersistedNoteShape(note, id))) return false;
+  if (!Object.entries(raw.notes).every(([id, note]) => isPersistedNoteShape(note, id, raw.schemaVersion))) return false;
   return true;
 }
 
@@ -230,6 +243,7 @@ function normalizeNote(value, now = new Date(), randomUUID = defaultRandomUUID) 
     id: typeof value.id === "string" && value.id ? value.id : randomUUID(),
     title: typeof value.title === "string" ? value.title.trim() : "",
     body: typeof value.body === "string" ? value.body : "",
+    richBody: normalizeRichBody(value.richBody),
     notebookId: typeof value.notebookId === "string" && value.notebookId ? value.notebookId : null,
     pinnedAt: typeof value.pinnedAt === "string" ? value.pinnedAt : null,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : now.toISOString(),
@@ -799,10 +813,16 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
     case "note:add": {
       const notebookId = validateTargetNotebook(next, operation.notebookId);
       const id = randomUUID();
+      const hasRichBody = Object.prototype.hasOwnProperty.call(operation, "richBody");
+      const richBody = hasRichBody
+        ? normalizeRichBody(operation.richBody)
+        : (typeof operation.body === "string" && operation.body ? null : emptyRichBody());
+      if (hasRichBody && !richBody) throw new Error("笔记格式数据无效");
       next.notes[id] = {
         id,
         title: typeof operation.title === "string" ? operation.title.trim() : "",
         body: typeof operation.body === "string" ? operation.body : "",
+        richBody,
         notebookId,
         pinnedAt: null,
         createdAt: timestamp,
@@ -821,13 +841,20 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
       const note = requireNote(next, operation.id);
       const hasTitle = Object.prototype.hasOwnProperty.call(operation, "title");
       const hasBody = Object.prototype.hasOwnProperty.call(operation, "body");
-      if (!hasTitle && !hasBody) throw new Error("没有可保存的笔记内容");
+      const hasRichBody = Object.prototype.hasOwnProperty.call(operation, "richBody");
+      if (!hasTitle && !hasBody && !hasRichBody) throw new Error("没有可保存的笔记内容");
       const title = hasTitle ? String(operation.title || "").trim() : note.title;
-      const body = hasBody && typeof operation.body === "string" ? operation.body : note.body;
-      if (title === note.title && body === note.body) changed = false;
+      const richBody = hasRichBody ? normalizeRichBody(operation.richBody) : (hasBody ? null : note.richBody);
+      if (hasRichBody && !richBody) throw new Error("笔记格式数据无效");
+      const body = hasRichBody
+        ? markdownFromRichBody(richBody)
+        : hasBody && typeof operation.body === "string" ? operation.body : note.body;
+      const sameRichBody = JSON.stringify(richBody) === JSON.stringify(note.richBody);
+      if (title === note.title && body === note.body && sameRichBody) changed = false;
       else {
         note.title = title;
         note.body = body;
+        note.richBody = richBody;
         note.updatedAt = timestamp;
       }
       break;
@@ -1006,7 +1033,11 @@ function searchState(state, query, { limit = 100 } = {}) {
   if (!needle) return empty;
 
   const notes = Object.values(state?.notes || {})
-    .filter((note) => !note.trashedAt && foldSearchText(`${note.title}\n${note.body}`).includes(needle))
+    .filter((note) => {
+      if (note.trashedAt) return false;
+      const bodyText = note.richBody ? plainTextFromRichBody(note.richBody) : stripOwnFormatMarkers(note.body);
+      return foldSearchText(`${note.title}\n${bodyText}`).includes(needle);
+    })
     .sort((a, b) => {
       if (Boolean(a.pinnedAt) !== Boolean(b.pinnedAt)) return a.pinnedAt ? -1 : 1;
       return b.updatedAt.localeCompare(a.updatedAt) || a.createdAt.localeCompare(b.createdAt);

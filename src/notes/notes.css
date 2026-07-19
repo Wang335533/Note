@@ -378,13 +378,13 @@
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   overflow: hidden;
 }
 
 .format-tool-button,
 .format-collapse-symbol {
-  width: 27px;
+  width: 26px;
   height: 27px;
   display: inline-grid;
   place-items: center;
@@ -429,7 +429,7 @@
 .format-divider {
   width: 1px;
   height: 17px;
-  margin: 0 3px;
+  margin: 0 2px;
   flex: 0 0 auto;
   background: rgba(74, 67, 60, 0.1);
 }
@@ -438,7 +438,9 @@
   position: relative;
   min-width: 0;
   height: 27px;
-  flex: 0 1 auto;
+  display: inline-flex;
+  flex: 0 0 auto;
+  overflow: hidden;
 }
 
 .format-select select {
@@ -460,7 +462,11 @@
 }
 
 .paragraph-format-select select {
-  width: 62px;
+  width: 58px;
+}
+
+.paragraph-format-select {
+  width: 58px;
 }
 
 .format-popover {
@@ -626,173 +632,164 @@
   cursor: pointer;
 }
 
-.markdown-editor-host {
+.rich-note-editor-host {
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  overflow: hidden;
-}
-
-.markdown-editor-host .cm-editor {
-  height: 100%;
-  background: transparent;
-  color: #3c3833;
-  font-size: 14px;
-  line-height: 1.72;
-}
-
-.markdown-editor-host .cm-editor.cm-focused {
-  outline: 0;
-}
-
-.markdown-editor-host .cm-scroller {
   overflow: auto;
   padding: 8px 32px 54px;
+  color: #45403b;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.72;
   scrollbar-width: thin;
   scrollbar-color: rgba(100, 92, 84, 0.16) transparent;
 }
 
-.markdown-editor-host .cm-content {
+.rich-note-prosemirror {
   min-height: 100%;
-  padding: 0;
+  outline: 0;
   caret-color: var(--accent-strong);
+  overflow-wrap: anywhere;
 }
 
-.markdown-editor-host .cm-line {
-  padding: 1px 0;
+.rich-note-prosemirror ::selection {
+  background: rgba(217, 119, 87, 0.17);
 }
 
-.markdown-editor-host .cm-cursor {
-  border-left-color: var(--accent-strong);
+.rich-note-prosemirror p {
+  margin: 0 0 0.72em;
 }
 
-.markdown-editor-host .cm-selectionBackground,
-.markdown-editor-host .cm-content ::selection {
-  background: rgba(217, 119, 87, 0.17) !important;
-}
-
-.markdown-editor-host .cm-placeholder {
+.rich-note-prosemirror p.is-editor-empty:first-child::before {
+  height: 0;
+  float: left;
   color: #b4aea6;
-  font-style: normal;
+  content: attr(data-placeholder);
+  pointer-events: none;
 }
 
-.markdown-editor-host .cm-live-rendered {
-  color: #45403b;
-}
-
-.markdown-editor-host .cm-live-active {
-  color: #554f49;
-}
-
-.markdown-editor-host .cm-live-heading {
-  padding-top: 10px;
-  padding-bottom: 5px;
+.rich-note-prosemirror h1,
+.rich-note-prosemirror h2,
+.rich-note-prosemirror h3 {
+  margin: 0;
+  padding: 10px 0 5px;
   color: #292622;
   font-family: Georgia, "Times New Roman", "Songti SC", serif;
   font-weight: 700;
   letter-spacing: -0.018em;
 }
 
-.markdown-editor-host .cm-live-heading-1 { font-size: 26px; line-height: 1.25; }
-.markdown-editor-host .cm-live-heading-2 { font-size: 21px; line-height: 1.3; }
-.markdown-editor-host .cm-live-heading-3 { font-size: 17px; line-height: 1.4; }
-.markdown-editor-host .cm-live-heading-4,
-.markdown-editor-host .cm-live-heading-5,
-.markdown-editor-host .cm-live-heading-6 { font-size: 14px; line-height: 1.5; }
+.rich-note-prosemirror h1 { font-size: 26px; line-height: 1.25; }
+.rich-note-prosemirror h2 { font-size: 21px; line-height: 1.3; }
+.rich-note-prosemirror h3 { font-size: 17px; line-height: 1.4; }
 
-.markdown-editor-host .cm-live-quote {
-  margin: 6px 0;
-  padding: 5px 10px;
+.rich-note-prosemirror ul,
+.rich-note-prosemirror ol {
+  margin: 0.25em 0 0.8em;
+  padding-left: 1.55em;
+}
+
+.rich-note-prosemirror li {
+  margin: 0.14em 0;
+  padding-left: 0.12em;
+}
+
+.rich-note-prosemirror li > p {
+  margin: 0;
+}
+
+.rich-note-prosemirror blockquote {
+  margin: 0.48em 0 0.82em;
+  padding: 6px 11px;
   border-left: 2px solid rgba(217, 119, 87, 0.55);
+  border-radius: 0 7px 7px 0;
   color: #746d66;
   background: rgba(217, 119, 87, 0.04);
 }
 
-.markdown-editor-host .cm-live-list-line {
-  padding-left: 4px;
+.rich-note-prosemirror blockquote p:last-child {
+  margin-bottom: 0;
 }
 
-.markdown-editor-host .cm-live-code-line {
-  padding: 2px 9px;
+.rich-note-prosemirror pre {
+  margin: 0.55em 0 0.85em;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid rgba(75, 68, 62, 0.075);
+  border-radius: 9px;
   background: rgba(75, 68, 62, 0.055);
   color: #5a514a;
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.62;
+  font: 12px/1.62 "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 }
 
-.cm-live-code-label {
-  color: #a09890;
-  font-size: 9px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  letter-spacing: 0.08em;
-}
-
-.cm-live-bullet,
-.cm-live-number {
-  min-width: 19px;
-  display: inline-block;
-  color: var(--accent);
-  font-weight: 720;
-}
-
-.cm-live-checkbox {
-  width: 17px;
-  height: 17px;
-  display: inline-grid;
-  place-items: center;
-  margin: 0 7px 0 0;
-  padding: 0;
-  border: 1px solid #928b83;
+.rich-note-prosemirror :not(pre) > code {
+  padding: 2px 4px;
   border-radius: 5px;
-  background: rgba(255, 255, 255, 0.68);
-  color: #fff;
-  vertical-align: -3px;
-  cursor: pointer;
+  background: rgba(72, 65, 59, 0.075);
+  color: #7c5143;
+  font: 0.9em "Cascadia Code", Consolas, monospace;
 }
 
-.cm-live-checkbox.is-checked {
-  border-color: var(--accent);
-  background: var(--accent);
+.rich-note-prosemirror a {
+  color: #a65e47;
+  text-decoration-color: rgba(166, 94, 71, 0.28);
+  text-underline-offset: 3px;
 }
 
-.markdown-editor-host .cm-live-check-complete {
+.rich-note-prosemirror hr {
+  height: 1px;
+  margin: 16px 0;
+  border: 0;
+  background: rgba(65, 58, 52, 0.14);
+}
+
+.rich-note-prosemirror ul[data-type="taskList"] {
+  padding-left: 0;
+  list-style: none;
+}
+
+.rich-note-prosemirror ul[data-type="taskList"] > li[data-checked] {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-left: 0;
+}
+
+.rich-note-prosemirror ul[data-type="taskList"] > li[data-checked] > label {
+  display: grid;
+  place-items: center;
+  padding-top: 4px;
+}
+
+.rich-note-prosemirror ul[data-type="taskList"] > li[data-checked] input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.rich-note-prosemirror ul[data-type="taskList"] > li[data-checked] > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.rich-note-prosemirror li[data-checked="true"] > div {
   color: #9b948d;
   text-decoration: line-through;
   text-decoration-color: rgba(126, 116, 108, 0.58);
   animation: note-check-complete 190ms ease-out;
 }
 
-@keyframes note-check-complete {
-  from { opacity: 0.7; text-decoration-color: transparent; }
-  to { opacity: 1; text-decoration-color: rgba(126, 116, 108, 0.58); }
-}
-
-.cm-live-checkbox span {
-  font-size: 11px;
-  line-height: 1;
-}
-
-.cm-live-rule {
-  width: 100%;
-  height: 1px;
-  display: inline-block;
-  margin: 9px 0 4px;
-  background: rgba(65, 58, 52, 0.14);
-  vertical-align: middle;
-}
-
-.cm-live-image {
-  width: 100%;
+.rich-note-image {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 5px;
-  padding: 8px 0;
+  margin: 8px 0;
 }
 
-.cm-live-image img {
+.rich-note-image img {
   max-width: 100%;
   max-height: 420px;
   border-radius: 10px;
@@ -800,12 +797,12 @@
   box-shadow: 0 3px 14px rgba(54, 47, 41, 0.08);
 }
 
-.cm-live-image > span {
+.rich-note-image figcaption {
   color: #99938b;
   font-size: 9px;
 }
 
-.cm-live-image.is-missing::before {
+.rich-note-image.is-missing::before {
   content: "图片暂时无法显示";
   padding: 18px;
   border: 1px dashed rgba(92, 84, 76, 0.2);
@@ -814,26 +811,9 @@
   font-size: 10px;
 }
 
-.cm-live-image.is-missing img {
+.rich-note-image.is-missing img {
   display: none;
 }
-
-.cm-live-strong { font-weight: 720; color: #302c28; }
-.cm-live-emphasis { color: #504944; font-style: italic; }
-.cm-live-link { color: #a65e47; text-decoration: underline; text-decoration-color: rgba(166, 94, 71, 0.28); text-underline-offset: 3px; }
-.cm-live-code-inline { padding: 2px 4px; border-radius: 5px; background: rgba(72, 65, 59, 0.075); color: #7c5143; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.9em; }
-.cm-live-strike { color: #8f8982; text-decoration: line-through; }
-.cm-live-underline { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-.cm-live-font-songti { font-family: SimSun, "Songti SC", serif; }
-.cm-live-font-kaiti { font-family: KaiTi, "Kaiti SC", serif; }
-.cm-live-font-simhei { font-family: SimHei, "Heiti SC", sans-serif; }
-.cm-live-font-times { font-family: "Times New Roman", Times, serif; }
-.cm-live-font-mono { font-family: "Cascadia Code", Consolas, monospace; }
-.cm-live-size-12 { font-size: 12px; }
-.cm-live-size-14 { font-size: 14px; }
-.cm-live-size-16 { font-size: 16px; }
-.cm-live-size-20 { font-size: 20px; line-height: 1.55; }
-.cm-live-size-24 { font-size: 24px; line-height: 1.45; }
 
 .note-editor-footer {
   min-height: 46px;
@@ -1340,7 +1320,7 @@
     padding-left: 25px;
   }
 
-  .markdown-editor-host .cm-scroller {
+  .rich-note-editor-host {
     padding-right: 25px;
     padding-left: 25px;
   }
