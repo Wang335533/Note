@@ -12,6 +12,7 @@ import {
   applyInlineFormat,
   captureFormatSnapshot,
   clearSelectedFormatting,
+  editorSelectionFor,
   formatStateAt,
   htmlToNoteMarkdown,
   insertLink,
@@ -44,7 +45,11 @@ function dispatchFormattingResult(view, result) {
   const before = view.state.doc.toString();
   const change = minimalChange(before, result.doc);
   if (!change) return false;
-  view.dispatch({ changes: change, selection: result.selection, scrollIntoView: true });
+  view.dispatch({
+    changes: change,
+    selection: editorSelectionFor(result.doc, result.selection),
+    scrollIntoView: true,
+  });
   view.focus();
   return true;
 }

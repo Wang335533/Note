@@ -6,6 +6,7 @@ import {
   applyInlineFormat,
   captureFormatSnapshot,
   clearSelectedFormatting,
+  editorSelectionFor,
   formatStateAt,
   insertLink,
   normalizeLinkUrl,
@@ -26,6 +27,11 @@ test("an empty selection creates a pending typing range", () => {
   const result = applyInlineFormat("alpha", { from: 5, to: 5 }, "underline");
   assert.equal(result.doc, "alpha<u></u>");
   assert.deepEqual(result.selection, { from: 8, to: 8 });
+});
+
+test("formatting selections are converted to a valid CodeMirror selection spec", () => {
+  assert.deepEqual(editorSelectionFor("研究", { from: 0, to: 2 }), { anchor: 0, head: 2 });
+  assert.deepEqual(editorSelectionFor("研究", { from: -10, to: 99 }), { anchor: 0, head: 2 });
 });
 
 test("font and size markers can nest while remaining independently detectable", () => {

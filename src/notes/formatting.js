@@ -36,6 +36,11 @@ function clampSelection(doc, selection = {}) {
   return { from, to };
 }
 
+export function editorSelectionFor(doc, selection = {}) {
+  const safe = clampSelection(doc, selection);
+  return { anchor: safe.from, head: safe.to };
+}
+
 function markerFor(kind, value = "") {
   if (kind === "bold") return { open: "**", close: "**" };
   if (kind === "italic") return { open: "*", close: "*" };
