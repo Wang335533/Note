@@ -621,6 +621,9 @@ function SettingsSheet({ state, close, mutate, showToast }) {
           <button type="button" className="secondary-button" onClick={() => noteApi.openDataFolder()}>
             <FolderOpen size={18} /> 数据位置
           </button>
+          <button type="button" className="secondary-button" onClick={() => noteApi.openBackupFolder()}>
+            <FolderOpen size={18} /> 升级备份
+          </button>
           <button type="button" className="secondary-button" onClick={async () => {
             const result = await noteApi.exportMarkdown();
             if (result.ok) showToast("已导出 Markdown");
@@ -1001,10 +1004,6 @@ export function App() {
         <section
           className={`note-card ${state.settings.reducedTransparency ? "opaque-card" : ""}`}
           aria-label={activeModule === "todo" ? "Note 今日清单" : "Note 笔记库"}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            setSettingsOpen(true);
-          }}
         >
         <header className="app-header">
           <button type="button" className="wordmark" onClick={() => setSettingsOpen(true)} title="打开设置">

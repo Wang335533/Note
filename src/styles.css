@@ -1356,6 +1356,10 @@ kbd {
   grid-template-columns: 1fr 1fr;
 }
 
+.sheet-actions.two-up > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .primary-button,
 .secondary-button,
 .danger-button {

@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("noteDesktop", {
   mutate: (operation) => ipcRenderer.invoke("note:mutate", operation),
   openSettings: () => ipcRenderer.invoke("note:open-settings"),
   openDataFolder: () => ipcRenderer.invoke("note:open-data-folder"),
+  openBackupFolder: () => ipcRenderer.invoke("note:open-backup-folder"),
   addNoteImage: (noteId, payload) => ipcRenderer.invoke("note:add-image", noteId, payload),
   getAssetUrl: (id) => (/^[A-Za-z0-9._-]+$/.test(id) ? `note-asset://local/${encodeURIComponent(id)}` : ""),
   exportLibrary: () => ipcRenderer.invoke("note:export-library"),

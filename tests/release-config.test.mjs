@@ -20,3 +20,10 @@ test("release configuration avoids the self-extracting portable target", () => {
 test("release contains only the locales the Chinese interface can use", () => {
   assert.deepEqual(packageJson.build?.electronLanguages, ["zh-CN", "zh-TW", "en-US"]);
 });
+
+test("2.1 keeps the stable Windows installation identity used by earlier notes", () => {
+  assert.equal(packageJson.version, "2.1.0");
+  assert.equal(packageJson.name, "desktop-note");
+  assert.equal(packageJson.build?.appId, "local.desktop.note");
+  assert.equal(packageJson.build?.productName, "Note");
+});

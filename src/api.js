@@ -353,6 +353,7 @@ export function createBrowserApi(browserWindow, {
       return { ok: true };
     },
     openDataFolder: async () => ({ ok: true }),
+    openBackupFolder: async () => ({ ok: true }),
     addNoteImage,
     getAssetUrl: (id) => assetData[id] || "",
     exportLibrary,

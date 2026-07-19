@@ -16,6 +16,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   notesLastNotebookId: "all",
   notesLastNoteId: null,
   notesPane: "list",
+  notesSidebarCollapsed: false,
+  notesToolbarCollapsed: false,
   resumeModuleAfterRollover: null,
 });
 
@@ -251,6 +253,8 @@ function normalizeState(raw, now = new Date(), { randomUUID = defaultRandomUUID 
     launchAtLogin: Boolean(rawSettings.launchAtLogin),
     reducedMotion: Boolean(rawSettings.reducedMotion),
     reducedTransparency: Boolean(rawSettings.reducedTransparency),
+    notesSidebarCollapsed: Boolean(rawSettings.notesSidebarCollapsed),
+    notesToolbarCollapsed: Boolean(rawSettings.notesToolbarCollapsed),
     windowBounds: normalizeWindowBounds(rawSettings.windowBounds),
   };
   settings.dayBoundaryHour = [0, 2, 4, 6].includes(Number(rawSettings.dayBoundaryHour))
@@ -915,6 +919,7 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
         "windowMode", "locked", "launchAtLogin", "dayBoundaryHour",
         "reducedMotion", "reducedTransparency", "windowBounds", "activeModule",
         "notesLastNotebookId", "notesLastNoteId", "notesPane",
+        "notesSidebarCollapsed", "notesToolbarCollapsed",
       ]);
       if (!allowed.has(key)) throw new Error("不支持的设置");
       if (key === "windowMode") {

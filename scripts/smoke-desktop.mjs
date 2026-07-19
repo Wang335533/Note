@@ -103,15 +103,22 @@ async function waitFor(send, expression, description) {
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "note-desktop-smoke-"));
 const appData = path.join(temporaryRoot, "Roaming");
 const localAppData = path.join(temporaryRoot, "Local");
+const isolatedUserData = path.join(temporaryRoot, "userData");
 await Promise.all([
   fs.mkdir(appData, { recursive: true }),
   fs.mkdir(localAppData, { recursive: true }),
+  fs.mkdir(isolatedUserData, { recursive: true }),
 ]);
 
 const port = await reservePort();
 const child = spawn(executable, [...args, `--remote-debugging-port=${port}`], {
   cwd: projectRoot,
-  env: { ...process.env, APPDATA: appData, LOCALAPPDATA: localAppData },
+  env: {
+    ...process.env,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
+    NOTE_SMOKE_USER_DATA: isolatedUserData,
+  },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
 });

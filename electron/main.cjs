@@ -22,6 +22,12 @@ const { createBoundedFileLogger } = require("./file-logger.cjs");
 const { isSameDocumentUrl, isTrustedRendererEvent } = require("./ipc-security.cjs");
 const { createSerializedWriter, selectLatestValidCandidate } = require("./persistence.cjs");
 const {
+  BACKUP_DIRECTORY_NAME,
+  completeUpgrade,
+  createUpgradeSnapshot,
+  restoreUpgradeSnapshot,
+} = require("./upgrade-guard.cjs");
+const {
   WINDOW_METRICS,
   fitWindowBounds,
   requestedWindowRectangle,
@@ -87,8 +93,13 @@ let desktopHostError = null;
 let cachedIcon = null;
 let backgroundServicesStarted = false;
 let backgroundServicesTimer = null;
+let pendingUpgrade = null;
 
-if (!app.isPackaged) {
+if (process.env.NOTE_SMOKE_USER_DATA && path.isAbsolute(process.env.NOTE_SMOKE_USER_DATA)) {
+  const smokeUserData = path.resolve(process.env.NOTE_SMOKE_USER_DATA);
+  fsSync.mkdirSync(smokeUserData, { recursive: true });
+  app.setPath("userData", smokeUserData);
+} else if (!app.isPackaged) {
   const devUserData = path.join(app.getPath("appData"), "desktop-note-dev");
   fsSync.mkdirSync(devUserData, { recursive: true });
   app.setPath("userData", devUserData);
@@ -190,6 +201,12 @@ async function loadState() {
 
   const selected = selectLatestValidCandidate(candidates, isPersistedStateShape);
   if (selected) {
+    pendingUpgrade = await createUpgradeSnapshot({
+      dataDirectory,
+      rawState: selected.raw,
+      sourceKind: selected.kind,
+      currentVersion: app.getVersion(),
+    });
     const raw = structuredClone(selected.raw);
     const legacySchema = raw.schemaVersion !== SCHEMA_VERSION;
     const legacyFloatingDefault = raw.settings?.windowMode === "floating"
@@ -209,6 +226,12 @@ async function loadState() {
     throw new Error(`发现现有数据文件但无法安全读取，已停止启动以避免覆盖。${details}`);
   }
 
+  pendingUpgrade = await createUpgradeSnapshot({
+    dataDirectory,
+    rawState: null,
+    sourceKind: "new-install",
+    currentVersion: app.getVersion(),
+  });
   state = createInitialState();
   primaryCanBeBackedUp = false;
 }
@@ -815,6 +838,27 @@ function createWindow() {
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (!isAllowedRendererUrl(url)) event.preventDefault();
   });
+  mainWindow.webContents.on("context-menu", (_event, params) => {
+    const editable = Boolean(params.isEditable);
+    const hasSelection = Boolean(params.selectionText);
+    if (!editable && !hasSelection) return;
+    const flags = params.editFlags || {};
+    const template = editable ? [
+      { label: "撤销", role: "undo", enabled: Boolean(flags.canUndo) },
+      { label: "重做", role: "redo", enabled: Boolean(flags.canRedo) },
+      { type: "separator" },
+      { label: "剪切", role: "cut", enabled: Boolean(flags.canCut) },
+      { label: "复制", role: "copy", enabled: Boolean(flags.canCopy) },
+      { label: "粘贴", role: "paste", enabled: Boolean(flags.canPaste) },
+      { label: "粘贴为纯文本", role: "pasteAndMatchStyle", enabled: Boolean(flags.canPaste) },
+      { type: "separator" },
+      { label: "全选", role: "selectAll", enabled: Boolean(flags.canSelectAll) },
+    ] : [
+      { label: "复制", role: "copy", enabled: hasSelection },
+      { label: "全选", role: "selectAll" },
+    ];
+    Menu.buildFromTemplate(template).popup({ window: mainWindow });
+  });
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     reportError("Note renderer stopped", details?.reason || "unknown reason");
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
@@ -1069,6 +1113,11 @@ function registerIpc() {
     return { ok: true };
   });
   handleTrustedIpc("note:open-data-folder", async () => ({ ok: true, error: await shell.openPath(dataDirectory) }));
+  handleTrustedIpc("note:open-backup-folder", async () => {
+    const backupDirectory = path.join(dataDirectory, BACKUP_DIRECTORY_NAME);
+    await fs.mkdir(backupDirectory, { recursive: true });
+    return { ok: true, error: await shell.openPath(backupDirectory) };
+  });
   handleTrustedIpc("note:add-image", (noteId, payload) => addNoteImage(noteId, payload));
   handleTrustedIpc("note:export-library", () => exportNotesLibrary());
   handleTrustedIpc("note:import-markdown", (notebookId) => importMarkdownFiles(notebookId));
@@ -1198,14 +1247,40 @@ app.on("second-instance", () => void showWindow({ temporaryForeground: true }));
 app.whenReady().then(async () => {
   devServerUrl = resolveDevServerUrl();
   await loadState();
+  let startupStateCommitted = false;
+  if (pendingUpgrade?.required) {
+    try {
+      if (!primaryCanBeBackedUp || needsStateMigration) {
+        await persistState(state, { durable: true });
+        startupStateCommitted = true;
+        needsStateMigration = false;
+      }
+      await completeUpgrade(dataDirectory, app.getVersion());
+    } catch (error) {
+      let restored = false;
+      if (pendingUpgrade.hasSnapshot) {
+        try {
+          await restoreUpgradeSnapshot(dataDirectory, stateFile);
+          restored = true;
+        } catch (restoreError) {
+          reportError("Unable to restore the pre-upgrade state", restoreError);
+        }
+      }
+      const recoveryMessage = restored
+        ? "已自动恢复升级前快照。"
+        : pendingUpgrade.hasSnapshot
+          ? "自动恢复未完成，升级快照仍保留在数据目录中。"
+          : "尚未写入任何旧数据。";
+      throw new Error(`升级数据时发生错误，${recoveryMessage}${error?.message || error}`);
+    }
+  }
   await cleanupOrphanedAttachments(state);
   registerAttachmentProtocol();
   const login = app.getLoginItemSettings(app.isPackaged
     ? { path: loginExecutablePath() }
     : { path: process.execPath, args: [app.getAppPath()] });
   const launchAtLogin = Boolean(login.openAtLogin);
-  const needsStartupSave = !primaryCanBeBackedUp
-    || needsStateMigration
+  const needsStartupSave = (!startupStateCommitted && (!primaryCanBeBackedUp || needsStateMigration))
     || state.settings.launchAtLogin !== launchAtLogin;
   state.settings.launchAtLogin = launchAtLogin;
   Menu.setApplicationMenu(null);

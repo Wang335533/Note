@@ -4,8 +4,18 @@ import { markdown } from "@codemirror/lang-markdown";
 import { searchKeymap } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { noteApi } from "../api.js";
+import {
+  applyBlockFormat,
+  applyFormatSnapshot,
+  applyInlineFormat,
+  captureFormatSnapshot,
+  clearSelectedFormatting,
+  formatStateAt,
+  htmlToNoteMarkdown,
+  insertLink,
+} from "./formatting.js";
 import { livePreviewExtension } from "./markdown-live-preview.js";
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -16,6 +26,29 @@ function selectionPayload(view) {
   return { text, from: range.from, to: range.to };
 }
 
+function minimalChange(before, after) {
+  if (before === after) return null;
+  let from = 0;
+  while (from < before.length && from < after.length && before[from] === after[from]) from += 1;
+  let beforeTo = before.length;
+  let afterTo = after.length;
+  while (beforeTo > from && afterTo > from && before[beforeTo - 1] === after[afterTo - 1]) {
+    beforeTo -= 1;
+    afterTo -= 1;
+  }
+  return { from, to: beforeTo, insert: after.slice(from, afterTo) };
+}
+
+function dispatchFormattingResult(view, result) {
+  if (!view || !result) return false;
+  const before = view.state.doc.toString();
+  const change = minimalChange(before, result.doc);
+  if (!change) return false;
+  view.dispatch({ changes: change, selection: result.selection, scrollIntoView: true });
+  view.focus();
+  return true;
+}
+
 function insertionWithSpacing(documentText, position, markdownText) {
   const before = documentText.slice(0, position);
   const after = documentText.slice(position);
@@ -24,22 +57,87 @@ function insertionWithSpacing(documentText, position, markdownText) {
   return `${prefix}${markdownText}${suffix}`;
 }
 
-export function MarkdownEditor({
+export const MarkdownEditor = forwardRef(function MarkdownEditor({
   noteId,
   value,
   onChange,
   onBlur,
   onSelectionChange,
+  onFormatStateChange,
   onBusyChange,
   showToast,
   readOnly = false,
-}) {
+}, forwardedRef) {
   const hostRef = useRef(null);
   const viewRef = useRef(null);
-  const callbacksRef = useRef({ onChange, onBlur, onSelectionChange, onBusyChange, showToast });
+  const callbacksRef = useRef({ onChange, onBlur, onSelectionChange, onFormatStateChange, onBusyChange, showToast });
   const syncingRef = useRef(false);
+  const painterSnapshotRef = useRef(null);
+  const painterActiveRef = useRef(false);
+  const painterTimerRef = useRef(null);
 
-  callbacksRef.current = { onChange, onBlur, onSelectionChange, onBusyChange, showToast };
+  callbacksRef.current = { onChange, onBlur, onSelectionChange, onFormatStateChange, onBusyChange, showToast };
+
+  const emitSelectionState = (view) => {
+    const payload = selectionPayload(view);
+    callbacksRef.current.onSelectionChange?.(payload);
+    callbacksRef.current.onFormatStateChange?.({
+      ...formatStateAt(view.state.doc.toString(), payload),
+      painterActive: painterActiveRef.current,
+    });
+  };
+
+  const cancelPainter = ({ quiet = false } = {}) => {
+    if (!painterActiveRef.current) return false;
+    painterActiveRef.current = false;
+    painterSnapshotRef.current = null;
+    if (viewRef.current) emitSelectionState(viewRef.current);
+    if (!quiet) callbacksRef.current.showToast?.("已取消格式刷");
+    return true;
+  };
+
+  useImperativeHandle(forwardedRef, () => ({
+    applyInline(kind, selectedValue = "") {
+      const view = viewRef.current;
+      if (!view || readOnly) return false;
+      const result = applyInlineFormat(view.state.doc.toString(), view.state.selection.main, kind, selectedValue);
+      return dispatchFormattingResult(view, result);
+    },
+    applyBlock(type) {
+      const view = viewRef.current;
+      if (!view || readOnly) return false;
+      const result = applyBlockFormat(view.state.doc.toString(), view.state.selection.main, type);
+      return dispatchFormattingResult(view, result);
+    },
+    clearFormatting() {
+      const view = viewRef.current;
+      if (!view || readOnly || view.state.selection.main.empty) return false;
+      const result = clearSelectedFormatting(view.state.doc.toString(), view.state.selection.main);
+      return dispatchFormattingResult(view, result);
+    },
+    insertLink(url, label = "") {
+      const view = viewRef.current;
+      if (!view || readOnly) return false;
+      const result = insertLink(view.state.doc.toString(), view.state.selection.main, url, label);
+      return dispatchFormattingResult(view, result);
+    },
+    startFormatPainter() {
+      const view = viewRef.current;
+      if (!view || readOnly) return false;
+      painterSnapshotRef.current = captureFormatSnapshot(view.state.doc.toString(), view.state.selection.main);
+      painterActiveRef.current = true;
+      emitSelectionState(view);
+      callbacksRef.current.showToast?.("格式刷已启用：拖选目标文字；Esc 取消");
+      view.focus();
+      return true;
+    },
+    cancelFormatPainter() {
+      return cancelPainter();
+    },
+    focus() {
+      viewRef.current?.focus();
+    },
+  }), [readOnly]);
 
   useEffect(() => {
     if (!hostRef.current) return undefined;
@@ -89,23 +187,36 @@ export function MarkdownEditor({
         EditorView.editable.of(!readOnly),
         EditorView.lineWrapping,
         placeholder("用 Markdown 写下正文…"),
-        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+        keymap.of([{
+          key: "Escape",
+          run() {
+            return cancelPainter();
+          },
+        }, indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         livePreviewExtension((id) => noteApi.getAssetUrl?.(id) || "", { renderAll: readOnly }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !syncingRef.current) {
             callbacksRef.current.onChange?.(update.state.doc.toString());
           }
           if (update.selectionSet || update.docChanged) {
-            callbacksRef.current.onSelectionChange?.(selectionPayload(update.view));
+            emitSelectionState(update.view);
           }
         }),
         EditorView.domEventHandlers({
           paste(event, view) {
             if (readOnly) return false;
             const files = [...(event.clipboardData?.files || [])];
-            if (!files.some((file) => IMAGE_TYPES.has(file.type))) return false;
+            if (files.some((file) => IMAGE_TYPES.has(file.type))) {
+              event.preventDefault();
+              void addImages(files, view);
+              return true;
+            }
+            const html = event.clipboardData?.getData("text/html") || "";
+            if (!html) return false;
+            const converted = htmlToNoteMarkdown(html);
+            if (!converted) return false;
             event.preventDefault();
-            void addImages(files, view);
+            view.dispatch(view.state.replaceSelection(converted), { scrollIntoView: true });
             return true;
           },
           drop(event, view) {
@@ -121,6 +232,24 @@ export function MarkdownEditor({
             callbacksRef.current.onBlur?.();
             return false;
           },
+          mouseup(_event, view) {
+            if (!painterActiveRef.current || view.state.selection.main.empty) return false;
+            clearTimeout(painterTimerRef.current);
+            painterTimerRef.current = setTimeout(() => {
+              if (!painterActiveRef.current || !painterSnapshotRef.current || view.state.selection.main.empty) return;
+              const result = applyFormatSnapshot(
+                view.state.doc.toString(),
+                view.state.selection.main,
+                painterSnapshotRef.current,
+              );
+              painterActiveRef.current = false;
+              painterSnapshotRef.current = null;
+              dispatchFormattingResult(view, result);
+              callbacksRef.current.showToast?.("格式已应用");
+              emitSelectionState(view);
+            }, 0);
+            return false;
+          },
         }),
         EditorView.contentAttributes.of({
           "aria-label": "Markdown 笔记正文",
@@ -131,9 +260,11 @@ export function MarkdownEditor({
     });
     const view = new EditorView({ state, parent: hostRef.current });
     viewRef.current = view;
-    callbacksRef.current.onSelectionChange?.(selectionPayload(view));
+    emitSelectionState(view);
 
     return () => {
+      clearTimeout(painterTimerRef.current);
+      cancelPainter({ quiet: true });
       callbacksRef.current.onBlur?.();
       view.destroy();
       viewRef.current = null;
@@ -149,4 +280,4 @@ export function MarkdownEditor({
   }, [value]);
 
   return <div ref={hostRef} className="markdown-editor-host" />;
-}
+});

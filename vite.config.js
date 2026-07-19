@@ -4,6 +4,9 @@ import { defineConfig } from "vite";
 export default defineConfig({
   base: "./",
   plugins: [react()],
+  optimizeDeps: {
+    include: ["desktop-note/store"],
+  },
   build: {
     rollupOptions: {
       output: {

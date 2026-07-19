@@ -10,6 +10,7 @@ import {
   ListChecks,
   Plus,
   PushPin,
+  SidebarSimple,
   SortAscending,
   Trash,
   UploadSimple,
@@ -17,6 +18,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { noteApi } from "../api.js";
+import { FormattingToolbar } from "./FormattingToolbar.jsx";
 import { MarkdownEditor } from "./MarkdownEditor.jsx";
 
 const SYSTEM_VIEWS = {
@@ -29,6 +31,8 @@ function visibleTitle(note) {
   if (note.title.trim()) return note.title.trim();
   const firstLine = note.body.split(/\r?\n/).find((line) => line.trim()) || "";
   const clean = firstLine
+    .replace(/<\/?(?:u|font)(?:\s[^>]*)?>/gi, "")
+    .replace(/<\/?span(?:\s[^>]*)?>/gi, "")
     .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/, "")
     .replace(/^\[[ xX]\]\s+/, "")
     .replace(/[*_`~[\]()>]/g, "")
@@ -40,6 +44,8 @@ function titleSuggestion(body) {
   const first = String(body || "").split(/\r?\n/).find((line) => line.trim());
   if (!first) return "";
   return first
+    .replace(/<\/?(?:u|font)(?:\s[^>]*)?>/gi, "")
+    .replace(/<\/?span(?:\s[^>]*)?>/gi, "")
     .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/, "")
     .replace(/^\[[ xX]\]\s+/, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
@@ -51,6 +57,8 @@ function titleSuggestion(body) {
 
 function noteExcerpt(note) {
   return note.body
+    .replace(/<\/?(?:u|font)(?:\s[^>]*)?>/gi, "")
+    .replace(/<\/?span(?:\s[^>]*)?>/gi, "")
     .replace(/!\[[^\]]*\]\([^)]*\)/g, " [图片] ")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm, "")
@@ -100,7 +108,20 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
   const [title, setTitle] = useState(note.title);
   const [body, setBody] = useState(note.body);
   const [selection, setSelection] = useState({ text: "", from: 0, to: 0 });
+  const [formatState, setFormatState] = useState({
+    bold: false,
+    italic: false,
+    underline: false,
+    strike: false,
+    code: false,
+    font: "",
+    size: "",
+    block: "paragraph",
+    canClear: false,
+    painterActive: false,
+  });
   const [imageBusy, setImageBusy] = useState(false);
+  const editorRef = useRef(null);
   const titleRef = useRef(note.title);
   const bodyRef = useRef(note.body);
   const savedTitleRef = useRef(note.title);
@@ -116,6 +137,7 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
     savedTitleRef.current = note.title;
     savedBodyRef.current = note.body;
     setSelection({ text: "", from: 0, to: 0 });
+    setFormatState((current) => ({ ...current, painterActive: false }));
   }, [note.id]);
 
   useEffect(() => {
@@ -170,6 +192,19 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
         <button type="button" className="icon-button note-back-button" aria-label="返回笔记列表" onClick={() => navigate(state.settings.notesLastNotebookId, note.id, "list")}>
           <ArrowLeft size={19} />
         </button>
+        <button
+          type="button"
+          className={`icon-button note-sidebar-toggle ${state.settings.notesSidebarCollapsed ? "is-accent" : ""}`}
+          aria-label={state.settings.notesSidebarCollapsed ? "显示笔记列表" : "收起笔记列表"}
+          title={state.settings.notesSidebarCollapsed ? "显示笔记列表" : "收起笔记列表"}
+          onClick={() => mutate({
+            type: "settings:set",
+            key: "notesSidebarCollapsed",
+            value: !state.settings.notesSidebarCollapsed,
+          })}
+        >
+          <SidebarSimple size={17} weight={state.settings.notesSidebarCollapsed ? "fill" : "regular"} />
+        </button>
         {trashed ? (
           <span className="trash-location"><Trash size={14} /> 废纸篓</span>
         ) : (
@@ -204,6 +239,19 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
         ) : null}
       </header>
 
+      <FormattingToolbar
+        editorRef={editorRef}
+        selection={selection}
+        formatState={formatState}
+        collapsed={state.settings.notesToolbarCollapsed}
+        readOnly={trashed}
+        onToggleCollapsed={() => mutate({
+          type: "settings:set",
+          key: "notesToolbarCollapsed",
+          value: !state.settings.notesToolbarCollapsed,
+        })}
+      />
+
       <div className="note-editor-title-wrap">
         <input
           className="note-title-input"
@@ -232,6 +280,7 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
       </div>
 
       <MarkdownEditor
+        ref={editorRef}
         key={note.id}
         noteId={note.id}
         value={body}
@@ -244,6 +293,7 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
         }}
         onBlur={() => void saveBody()}
         onSelectionChange={setSelection}
+        onFormatStateChange={setFormatState}
         onBusyChange={setImageBusy}
         showToast={showToast}
       />
@@ -416,7 +466,7 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
   const looseTrashNotes = unpinned.filter((note) => !groupedTrashNoteIds.has(note.id));
 
   return (
-    <div className={`notes-workspace pane-${state.settings.notesPane}`}>
+    <div className={`notes-workspace pane-${state.settings.notesPane} ${state.settings.notesSidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
       <section className="notes-master" aria-label="笔记列表">
         <header className="notes-list-toolbar">
           <button type="button" className="notebook-trigger" aria-expanded={drawerOpen} onClick={() => setDrawerOpen(true)}>
@@ -529,6 +579,13 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
             <FileText size={30} />
             <strong>选择一篇笔记</strong>
             <span>列表与编辑器会保留各自的位置。</span>
+            {state.settings.notesSidebarCollapsed ? (
+              <button type="button" className="show-notes-list-button" onClick={() => mutate({
+                type: "settings:set",
+                key: "notesSidebarCollapsed",
+                value: false,
+              })}><SidebarSimple size={16} /> 显示笔记列表</button>
+            ) : null}
           </div>
         )}
       </section>

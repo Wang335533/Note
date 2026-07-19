@@ -524,6 +524,26 @@ test("notes navigation changes module, view, selection, and pane atomically", ()
   assert.equal(unchanged.revision, state.revision);
 });
 
+test("notes layout preferences default open and persist independent collapse choices", () => {
+  const now = new Date(2026, 6, 19, 10, 0, 0);
+  let state = createInitialState(now);
+  assert.equal(state.settings.notesSidebarCollapsed, false);
+  assert.equal(state.settings.notesToolbarCollapsed, false);
+  state = applyOperation(state, {
+    type: "settings:set",
+    key: "notesSidebarCollapsed",
+    value: true,
+  }, now);
+  state = applyOperation(state, {
+    type: "settings:set",
+    key: "notesToolbarCollapsed",
+    value: true,
+  }, now);
+  const recovered = normalizeState(JSON.parse(JSON.stringify(state)), now);
+  assert.equal(recovered.settings.notesSidebarCollapsed, true);
+  assert.equal(recovered.settings.notesToolbarCollapsed, true);
+});
+
 test("unchanged note edits and invalid note targets never increase revision", () => {
   const now = new Date(2026, 6, 12, 14, 0, 0);
   let state = applyOperation(createInitialState(now), {

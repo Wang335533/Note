@@ -104,9 +104,10 @@ function rangesOverlap(left, right) {
   return left.from < right.to && right.from < left.to;
 }
 
-function addInlinePreview(text, lineFrom, decorations, occupied) {
+function addInlinePreview(text, lineFrom, decorations, occupied, { controlledOnly = false } = {}) {
   const patterns = [
     {
+      controlled: false,
       regexp: /\[([^\]]+)\]\(([^)]+)\)/g,
       content: (match) => ({ from: match.index + 1, to: match.index + 1 + match[1].length, className: "cm-live-link" }),
       markers: (match) => [
@@ -115,6 +116,7 @@ function addInlinePreview(text, lineFrom, decorations, occupied) {
       ],
     },
     {
+      controlled: false,
       regexp: /(\*\*|__)(\S(?:.*?\S)?)\1/g,
       content: (match) => ({ from: match.index + match[1].length, to: match.index + match[0].length - match[1].length, className: "cm-live-strong" }),
       markers: (match) => [
@@ -123,6 +125,7 @@ function addInlinePreview(text, lineFrom, decorations, occupied) {
       ],
     },
     {
+      controlled: false,
       regexp: /(?<![*_])([*_])(\S(?:.*?\S)?)\1(?![*_])/g,
       content: (match) => ({ from: match.index + 1, to: match.index + match[0].length - 1, className: "cm-live-emphasis" }),
       markers: (match) => [
@@ -131,6 +134,7 @@ function addInlinePreview(text, lineFrom, decorations, occupied) {
       ],
     },
     {
+      controlled: false,
       regexp: /(`+)([^`\n]+?)\1/g,
       content: (match) => ({ from: match.index + match[1].length, to: match.index + match[0].length - match[1].length, className: "cm-live-code-inline" }),
       markers: (match) => [
@@ -139,6 +143,7 @@ function addInlinePreview(text, lineFrom, decorations, occupied) {
       ],
     },
     {
+      controlled: false,
       regexp: /~~(\S(?:.*?\S)?)~~/g,
       content: (match) => ({ from: match.index + 2, to: match.index + match[0].length - 2, className: "cm-live-strike" }),
       markers: (match) => [
@@ -146,14 +151,65 @@ function addInlinePreview(text, lineFrom, decorations, occupied) {
         { from: match.index + match[0].length - 2, to: match.index + match[0].length },
       ],
     },
+    {
+      controlled: true,
+      allowOverlap: true,
+      regexp: /<u>([^\n]*?)<\/u>/g,
+      content: (match) => ({ from: match.index + 3, to: match.index + match[0].length - 4, className: "cm-live-underline" }),
+      markers: (match) => [
+        { from: match.index, to: match.index + 3 },
+        { from: match.index + match[0].length - 4, to: match.index + match[0].length },
+      ],
+    },
+    {
+      controlled: true,
+      allowOverlap: true,
+      regexp: /<font data-note-font="(songti|kaiti|simhei|times-new-roman|monospace)">([^\n]*?)<\/font>/g,
+      content: (match) => {
+        const openLength = match[0].indexOf(">") + 1;
+        return {
+          from: match.index + openLength,
+          to: match.index + match[0].length - 7,
+          className: `cm-live-font-${match[1] === "times-new-roman" ? "times" : match[1] === "monospace" ? "mono" : match[1]}`,
+        };
+      },
+      markers: (match) => {
+        const openLength = match[0].indexOf(">") + 1;
+        return [
+          { from: match.index, to: match.index + openLength },
+          { from: match.index + match[0].length - 7, to: match.index + match[0].length },
+        ];
+      },
+    },
+    {
+      controlled: true,
+      allowOverlap: true,
+      regexp: /<span data-note-size="(12|14|16|20|24)">([^\n]*?)<\/span>/g,
+      content: (match) => {
+        const openLength = match[0].indexOf(">") + 1;
+        return {
+          from: match.index + openLength,
+          to: match.index + match[0].length - 7,
+          className: `cm-live-size-${match[1]}`,
+        };
+      },
+      markers: (match) => {
+        const openLength = match[0].indexOf(">") + 1;
+        return [
+          { from: match.index, to: match.index + openLength },
+          { from: match.index + match[0].length - 7, to: match.index + match[0].length },
+        ];
+      },
+    },
   ];
 
   for (const pattern of patterns) {
+    if (controlledOnly && !pattern.controlled) continue;
     pattern.regexp.lastIndex = 0;
     for (const match of text.matchAll(pattern.regexp)) {
       const whole = { from: match.index, to: match.index + match[0].length };
-      if (occupied.some((range) => rangesOverlap(range, whole))) continue;
-      occupied.push(whole);
+      if (!pattern.allowOverlap && occupied.some((range) => rangesOverlap(range, whole))) continue;
+      if (!pattern.allowOverlap) occupied.push(whole);
       const content = pattern.content(match);
       decorations.push(Decoration.mark({ class: content.className }).range(
         lineFrom + content.from,
@@ -193,6 +249,7 @@ function buildDecorations(view, resolveAssetUrl, renderAll) {
     else if (quote) lineClasses.push("cm-live-quote");
     else if (checkbox || bullet || numbered) lineClasses.push("cm-live-list-line");
     else if (trimmed && !codeLine) lineClasses.push("cm-live-paragraph");
+    if (checkbox?.[2]?.toLocaleLowerCase() === "x") lineClasses.push("cm-live-check-complete");
     decorations.push(Decoration.line({ class: lineClasses.join(" ") }).range(line.from));
 
     if (!activeBlock && trimmed) {
@@ -236,6 +293,8 @@ function buildDecorations(view, resolveAssetUrl, renderAll) {
       if (!occupied.some((range) => range.from === 0 && range.to === text.length) && !codeLine) {
         addInlinePreview(text, line.from, decorations, occupied);
       }
+    } else if (activeBlock && trimmed && !codeLine) {
+      addInlinePreview(text, line.from, decorations, [], { controlledOnly: true });
     }
 
     if (fence) inCodeBlock = !inCodeBlock;
