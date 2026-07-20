@@ -2,7 +2,16 @@
   "name": "desktop-note",
   "version": "2.2.1",
   "description": "A calm, local-first daily note and checklist for the Windows desktop.",
-  "author": "Local",
+  "author": "Wang335533",
+  "license": "MIT",
+  "homepage": "https://github.com/Wang335533/Note#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wang335533/Note.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Wang335533/Note/issues"
+  },
   "private": true,
   "type": "module",
   "exports": {

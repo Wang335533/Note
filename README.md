@@ -1,8 +1,20 @@
 # Note
 
+[![CI](https://github.com/Wang335533/Note/actions/workflows/ci.yml/badge.svg)](https://github.com/Wang335533/Note/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Wang335533/Note?label=latest)](https://github.com/Wang335533/Note/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-6f6258.svg)](LICENSE)
+
 一个嵌在 Windows 桌面上的本地 Note 框架：`Todo` 保留“一页今日”的直接感，`Notes` 提供独立、长期、结构化的富文本笔记库。两者是同一应用中的同级模块，内容可以互相链接，但生命周期彼此独立。
 
 2.2.1 延续暖白、炭黑、浅灰与陶土橙的克制视觉，并把 Notes 正文升级为支持数学公式的结构化富文本。窗口仍可从四边和四角自由缩放，限制在 420×660 到 760×1050；Notes 在窄窗中使用列表/编辑器导航，在宽窗中自动切换为双栏主从布局。
+
+## 下载
+
+[下载最新 Windows 安装版](https://github.com/Wang335533/Note/releases/latest)。在 Release 页面选择 `Note-x.y.z-setup.exe`；`SHA256SUMS.txt` 可用于核对下载文件是否完整。
+
+Note 当前未使用商业代码签名证书，因此 Windows 首次运行时可能显示“未知发布者”或 SmartScreen 提示。安装包由本仓库的 GitHub Actions 从对应版本源码自动构建。
+
+安装新版本时直接覆盖旧版本即可。Todo、笔记正文、图片和设置保存在 Windows 用户数据目录，不在安装目录中；升级不会创建一套全新的 Note。升级前仍会保留最近一个兼容性快照，便于异常时恢复。
 
 ## 已实现
 
@@ -41,7 +53,7 @@
 
 ## 安装与直接使用
 
-正式交付只生成可直接运行的目录与 NSIS 安装包，不生成需要先自解压的 portable 版本。构建 2.2.1 后，运行目录中的 `Note.exe`，或使用 `Note-2.2.1-setup.exe` 在每台电脑上分别安装。
+正式交付只生成 NSIS 安装包，不生成需要先自解压的 portable 版本。普通用户直接从 [Releases](https://github.com/Wang335533/Note/releases) 下载 `Note-x.y.z-setup.exe` 安装。
 
 每次安装都是独立的本地应用，不存在共享内容库。A 电脑的 Todo、笔记正文和图片不会写到 B 电脑，也不会进入项目目录或安装包；跨电脑迁移只能由用户主动整库导出、再导入。
 
@@ -71,6 +83,26 @@ npm run package:win
 npm run package:installer
 npm run package:fast
 ```
+
+## 发布新版本
+
+GitHub Actions 会在每次推送或拉取请求时运行测试和生产构建。正式版本采用语义化标签发布：
+
+1. 更新 `package.json` 与 `package-lock.json` 中的版本号，并完成测试。
+2. 提交代码并创建同版本标签，例如 `v2.2.2`。
+3. 推送提交和标签；Release 工作流会在 Windows 环境重新安装锁定依赖、运行测试、构建 NSIS 安装包、生成 SHA-256 校验文件并发布正式 GitHub Release。
+
+```powershell
+npm version patch --no-git-tag-version
+npm test
+git add package.json package-lock.json
+git commit -m "release: v2.2.2"
+git tag v2.2.2
+git push origin main
+git push origin v2.2.2
+```
+
+只有 `v主版本.次版本.修订号` 标签会触发正式发布。`release/` 始终保持在 Git 忽略列表中，安装包只作为 GitHub Release 附件保存。
 
 ## 数据位置
 
