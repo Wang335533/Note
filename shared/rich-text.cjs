@@ -1,4 +1,4 @@
-const RICH_BODY_VERSION = 1;
+const RICH_BODY_VERSION = 2;
 
 const RICH_NODE_TYPES = new Set([
   "doc",
@@ -14,6 +14,8 @@ const RICH_NODE_TYPES = new Set([
   "hardBreak",
   "horizontalRule",
   "image",
+  "inlineMath",
+  "blockMath",
   "text",
 ]);
 
@@ -31,10 +33,11 @@ const NOTE_FONT_VALUES = new Set(["songti", "kaiti", "simhei", "times-new-roman"
 const NOTE_SIZE_VALUES = new Set(["12", "14", "16", "20", "24"]);
 const NOTE_FONT_FAMILIES = new Set(["SimSun", "KaiTi", "SimHei", "Times New Roman", "Cascadia Code"]);
 const NOTE_FONT_SIZES = new Set(["12px", "14px", "16px", "20px", "24px"]);
-const BLOCK_NODE_TYPES = new Set(["paragraph", "heading", "blockquote", "bulletList", "orderedList", "taskList", "codeBlock", "horizontalRule", "image"]);
-const INLINE_NODE_TYPES = new Set(["text", "hardBreak"]);
+const BLOCK_NODE_TYPES = new Set(["paragraph", "heading", "blockquote", "bulletList", "orderedList", "taskList", "codeBlock", "horizontalRule", "image", "blockMath"]);
+const INLINE_NODE_TYPES = new Set(["text", "hardBreak", "inlineMath"]);
 const MAX_RICH_NODES = 50000;
 const MAX_RICH_TEXT = 5 * 1024 * 1024;
+const MAX_LATEX_TEXT = 128 * 1024;
 
 function emptyRichBody() {
   return { type: "doc", content: [{ type: "paragraph" }] };
@@ -74,6 +77,12 @@ function validNodeAttributes(node) {
     && (attrs?.type === undefined || attrs.type === null || typeof attrs.type === "string");
   if (node.type === "taskItem") return hasOnlyKeys(attrs, ["checked"]) && typeof attrs?.checked === "boolean";
   if (node.type === "codeBlock") return hasOnlyKeys(attrs, ["language"]) && (attrs?.language === undefined || attrs.language === null || typeof attrs.language === "string");
+  if (["inlineMath", "blockMath"].includes(node.type)) {
+    return hasOnlyKeys(attrs, ["latex"])
+      && typeof attrs?.latex === "string"
+      && Boolean(attrs.latex.trim())
+      && attrs.latex.length <= MAX_LATEX_TEXT;
+  }
   if (node.type === "image") {
     if (!hasOnlyKeys(attrs, ["src", "alt", "title", "width", "height"]) || typeof attrs?.src !== "string") return false;
     if (!isSafeStoredUrl(attrs.src, { image: true })) return false;
@@ -126,6 +135,11 @@ function validateRichNode(node, budget, depth = 0, parentType = null) {
     return false;
   }
 
+  if (["inlineMath", "blockMath"].includes(node.type)) {
+    budget.text += node.attrs.latex.length;
+    if (budget.text > MAX_RICH_TEXT) return false;
+  }
+
   if (node.marks !== undefined) {
     if (!Array.isArray(node.marks) || node.type !== "text") return false;
     if (parentType === "codeBlock" && node.marks.length) return false;
@@ -142,7 +156,7 @@ function validateRichNode(node, budget, depth = 0, parentType = null) {
   if (["doc", "blockquote", "bulletList", "orderedList", "taskList", "listItem", "taskItem"].includes(node.type)
     && (!Array.isArray(node.content) || !node.content.length)) return false;
   if (["listItem", "taskItem"].includes(node.type) && node.content[0]?.type !== "paragraph") return false;
-  if (["hardBreak", "horizontalRule", "image"].includes(node.type) && node.content !== undefined) return false;
+  if (["hardBreak", "horizontalRule", "image", "inlineMath", "blockMath"].includes(node.type) && node.content !== undefined) return false;
   return true;
 }
 
@@ -154,6 +168,109 @@ function isRichBody(value) {
 
 function normalizeRichBody(value) {
   return isRichBody(value) ? structuredClone(value) : null;
+}
+
+function mathDelimiterAt(value, index) {
+  if (value.startsWith("\\(", index)) return { open: "\\(", close: "\\)", source: "paren" };
+  if (value[index] === "$" && value[index + 1] !== "$" && value[index - 1] !== "$" && value[index - 1] !== "\\") {
+    return { open: "$", close: "$", source: "dollar" };
+  }
+  return null;
+}
+
+function findMathClose(value, from, delimiter) {
+  for (let index = from; index < value.length; index += 1) {
+    if (!value.startsWith(delimiter.close, index)) continue;
+    if (delimiter.source === "dollar" && value[index - 1] === "\\") continue;
+    if (delimiter.source === "dollar" && value[index + 1] === "$") continue;
+    return index;
+  }
+  return -1;
+}
+
+function splitInlineMathText(node) {
+  if (node.type !== "text" || node.marks?.some((mark) => mark.type === "code")) return [node];
+  const value = node.text || "";
+  const result = [];
+  let plainStart = 0;
+  let index = 0;
+  while (index < value.length) {
+    const delimiter = mathDelimiterAt(value, index);
+    if (!delimiter) {
+      index += 1;
+      continue;
+    }
+    const closeAt = findMathClose(value, index + delimiter.open.length, delimiter);
+    if (closeAt < 0) {
+      index += delimiter.open.length;
+      continue;
+    }
+    const latex = value.slice(index + delimiter.open.length, closeAt).trim();
+    const numericCurrency = delimiter.source === "dollar" && /^\d+(?:[.,]\d+)?$/.test(latex);
+    if (!latex || latex.includes("\n") || numericCurrency) {
+      index = closeAt + delimiter.close.length;
+      continue;
+    }
+    if (index > plainStart) result.push({ ...node, text: value.slice(plainStart, index) });
+    result.push({ type: "inlineMath", attrs: { latex } });
+    index = closeAt + delimiter.close.length;
+    plainStart = index;
+  }
+  if (!result.length) return [node];
+  if (plainStart < value.length) result.push({ ...node, text: value.slice(plainStart) });
+  return result.filter((item) => item.type !== "text" || item.text);
+}
+
+function textBlockSource(node) {
+  if (!["paragraph", "heading"].includes(node.type)) return null;
+  let value = "";
+  for (const child of node.content || []) {
+    if (child.type === "hardBreak") value += "\n";
+    else if (child.type === "text" && !child.marks?.some((mark) => mark.type === "code")) value += child.text;
+    else return null;
+  }
+  return value;
+}
+
+function blockMathLatex(value) {
+  const source = String(value || "").trim();
+  const bracket = /^\\\[([\s\S]+)\\\]$/.exec(source);
+  if (bracket?.[1]?.trim()) return bracket[1].trim();
+  const dollars = /^\$\$([\s\S]+)\$\$$/.exec(source);
+  if (dollars?.[1]?.trim()) return dollars[1].trim();
+  const legacyBracket = /^\[([\s\S]+)\]$/.exec(source);
+  if (legacyBracket?.[1]?.trim() && /\\(?:begin|frac|sum|prod|int|left|right|text|sqrt|matrix|cases)\b/.test(legacyBracket[1])) {
+    return legacyBracket[1].trim();
+  }
+  return null;
+}
+
+function migrateMathInRichBody(value) {
+  const source = normalizeRichBody(value);
+  if (!source) return { richBody: null, changed: false };
+  let changed = false;
+  const rewrite = (node, parentType = null, index = 0) => {
+    if (["codeBlock", "inlineMath", "blockMath"].includes(node.type)) return node;
+    const blockSource = textBlockSource(node);
+    const blockLatex = blockSource && blockMathLatex(blockSource);
+    const canBecomeBlock = blockLatex && (parentType !== "listItem" && parentType !== "taskItem" || index > 0);
+    if (canBecomeBlock) {
+      changed = true;
+      return { type: "blockMath", attrs: { latex: blockLatex } };
+    }
+    if (!node.content) return node;
+    const content = [];
+    for (const [childIndex, child] of node.content.entries()) {
+      if (child.type === "text") {
+        const parts = splitInlineMathText(child);
+        if (parts.length !== 1 || parts[0] !== child) changed = true;
+        content.push(...parts);
+      } else content.push(rewrite(child, node.type, childIndex));
+    }
+    return { ...node, content };
+  };
+  const richBody = rewrite(source);
+  return { richBody: normalizeRichBody(richBody) || source, changed };
 }
 
 function stripOwnFormatMarkers(value) {
@@ -198,6 +315,7 @@ function inlineMarkdown(node) {
     const src = String(node.attrs?.src || "").replace(/[\s<>]/g, (part) => encodeURIComponent(part));
     return src ? `![${alt}](${src})` : "";
   }
+  if (node.type === "inlineMath") return `$${String(node.attrs?.latex || "").trim()}$`;
   if (node.type !== "text") return (node.content || []).map(inlineMarkdown).join("");
 
   const marks = Array.isArray(node.marks) ? node.marks : [];
@@ -231,6 +349,7 @@ function blockMarkdown(node, context = {}) {
   }
   if (node.type === "horizontalRule") return "---";
   if (node.type === "image") return inlineMarkdown(node);
+  if (node.type === "blockMath") return `$$\n${String(node.attrs?.latex || "").trim()}\n$$`;
   if (node.type === "blockquote") {
     const content = (node.content || []).map((child) => blockMarkdown(child)).filter(Boolean).join("\n\n");
     return prefixLines(content, "> ", "> ");
@@ -271,6 +390,8 @@ function plainTextFromRichBody(value) {
   const visit = (node) => {
     if (node.type === "text") parts.push(node.text);
     else if (node.type === "image" && node.attrs?.alt) parts.push(String(node.attrs.alt));
+    else if (node.type === "inlineMath") parts.push(`$${String(node.attrs?.latex || "").trim()}$`);
+    else if (node.type === "blockMath") parts.push(`$$\n${String(node.attrs?.latex || "").trim()}\n$$\n`);
     else {
       for (const child of node.content || []) visit(child);
       if (["paragraph", "heading", "blockquote", "listItem", "taskItem", "codeBlock"].includes(node.type)) parts.push("\n");
@@ -287,6 +408,7 @@ module.exports = {
   emptyRichBody,
   isRichBody,
   markdownFromRichBody,
+  migrateMathInRichBody,
   normalizeRichBody,
   plainTextFromRichBody,
   stripOwnFormatMarkers,

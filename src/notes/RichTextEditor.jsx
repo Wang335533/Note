@@ -1,18 +1,32 @@
 import { EditorContent, useEditor } from "@tiptap/react";
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import { Fragment } from "@tiptap/pm/model";
+import katex from "katex";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import * as richTextModule from "desktop-note/rich-text";
 import { noteAssetUrl } from "desktop-note/library-files";
 import { noteApi } from "../api.js";
 import {
   createEditorExtensions,
+  clipboardTextFromSlice,
+  containsMathMarkup,
   fontFamilyFor,
   fontSizeFor,
   formatStateForEditor,
+  migrateRichBodyMath,
+  migratePastedMathSlice,
   richBodyFromLegacyMarkdown,
 } from "./rich-text.js";
 
 const { markdownFromRichBody, plainTextFromRichBody } = richTextModule;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const KATEX_PREVIEW_OPTIONS = Object.freeze({
+  throwOnError: true,
+  strict: "ignore",
+  trust: false,
+  maxExpand: 1000,
+  output: "htmlAndMathml",
+});
 
 function normalizeLinkUrl(value) {
   const raw = String(value || "").trim();
@@ -58,6 +72,138 @@ function applyBlockToChain(chain, type) {
   return chain.setParagraph();
 }
 
+function mathAnchor(editor, pos = null) {
+  if (!editor?.view) return { left: 24, top: 80, bottom: 80, width: 0 };
+  const dom = Number.isInteger(pos) ? editor.view.nodeDOM(pos) : null;
+  const rectangle = dom instanceof Element
+    ? dom.getBoundingClientRect()
+    : editor.view.coordsAtPos(editor.state.selection.from);
+  return {
+    left: rectangle.left,
+    top: rectangle.top,
+    bottom: rectangle.bottom,
+    width: rectangle.width || 0,
+  };
+}
+
+function MathEditorPopover({ draft, onChange, onCommit, onCancel, onTypeChange, popoverRef }) {
+  const previewRef = useRef(null);
+  const inputRef = useRef(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [draft.id]);
+
+  useEffect(() => {
+    if (!previewRef.current) return;
+    const latex = draft.latex.trim();
+    if (!latex) {
+      previewRef.current.textContent = "输入 LaTeX 后在这里预览";
+      setError("");
+      return;
+    }
+    try {
+      katex.render(latex, previewRef.current, {
+        ...KATEX_PREVIEW_OPTIONS,
+        displayMode: draft.type === "block",
+      });
+      setError("");
+    } catch (renderError) {
+      previewRef.current.textContent = latex;
+      setError(renderError?.message?.replace(/^KaTeX parse error:\s*/i, "") || "公式暂时无法编译");
+    }
+  }, [draft.latex, draft.type]);
+
+  const width = Math.min(360, Math.max(280, window.innerWidth - 24));
+  const estimatedHeight = 250;
+  const left = Math.max(12, Math.min(draft.anchor.left, window.innerWidth - width - 12));
+  const below = draft.anchor.bottom + 8;
+  const top = below + estimatedHeight <= window.innerHeight
+    ? below
+    : Math.max(12, draft.anchor.top - estimatedHeight - 8);
+
+  return createPortal(
+    <div
+      ref={popoverRef}
+      className={`math-editor-popover ${error ? "has-error" : ""}`}
+      style={{ left, top, width }}
+      role="dialog"
+      aria-label="编辑公式"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onCancel();
+        } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault();
+          onCommit();
+        }
+      }}
+    >
+      <header>
+        <div className="math-type-switch" aria-label="公式类型">
+          <button type="button" className={draft.type === "inline" ? "is-active" : ""} onClick={() => onTypeChange("inline")}>行内</button>
+          <button type="button" className={draft.type === "block" ? "is-active" : ""} onClick={() => onTypeChange("block")}>独立</button>
+        </div>
+        <span>LaTeX</span>
+      </header>
+      <div ref={previewRef} className="math-editor-preview" aria-live="polite" />
+      <textarea
+        ref={inputRef}
+        value={draft.latex}
+        spellCheck="false"
+        aria-label="LaTeX 源码"
+        placeholder="例如：x=\\begin{cases}1 & \\text{是}\\\\0 & \\text{否}\\end{cases}"
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <footer>
+        <span className="math-editor-status">{error ? `源码已保留 · ${error}` : "Ctrl + Enter 确认 · Esc 取消"}</span>
+        <div>
+          <button type="button" onClick={onCancel}>取消</button>
+          <button type="button" className="is-primary" onClick={onCommit}>{draft.latex.trim() ? "完成" : draft.existing ? "删除" : "取消"}</button>
+        </div>
+      </footer>
+    </div>,
+    document.body,
+  );
+}
+
+function replaceMathNode(editor, draft, latex) {
+  const node = editor.state.doc.nodeAt(draft.pos);
+  if (!node || !["inlineMath", "blockMath"].includes(node.type.name)) return false;
+  if (!latex) {
+    return node.type.name === "inlineMath"
+      ? editor.commands.deleteInlineMath({ pos: draft.pos })
+      : editor.commands.deleteBlockMath({ pos: draft.pos });
+  }
+  const targetName = draft.type === "inline" ? "inlineMath" : "blockMath";
+  if (node.type.name === targetName) {
+    return targetName === "inlineMath"
+      ? editor.commands.updateInlineMath({ pos: draft.pos, latex })
+      : editor.commands.updateBlockMath({ pos: draft.pos, latex });
+  }
+  const { tr, schema } = editor.state;
+  if (node.type.name === "blockMath") {
+    const paragraph = schema.nodes.paragraph.create(null, schema.nodes.inlineMath.create({ latex }));
+    tr.replaceWith(draft.pos, draft.pos + node.nodeSize, paragraph);
+  } else {
+    const $pos = tr.doc.resolve(draft.pos);
+    const parent = $pos.parent;
+    const before = parent.content.cut(0, $pos.parentOffset);
+    const after = parent.content.cut($pos.parentOffset + node.nodeSize);
+    const blocks = [];
+    if (before.size) blocks.push(parent.type.create(parent.attrs, before));
+    blocks.push(schema.nodes.blockMath.create({ latex }));
+    if (after.size) blocks.push(parent.type.create(parent.attrs, after));
+    if (!$pos.node(-1).canReplace($pos.index(-1), $pos.indexAfter(-1), Fragment.fromArray(blocks))) return false;
+    tr.replaceWith($pos.before(), $pos.after(), Fragment.fromArray(blocks));
+  }
+  editor.view.dispatch(tr.scrollIntoView());
+  editor.commands.focus();
+  return true;
+}
+
 export const RichTextEditor = forwardRef(function RichTextEditor({
   noteId,
   richBody,
@@ -72,16 +218,28 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
 }, forwardedRef) {
   const callbacksRef = useRef({ onChange, onBlur, onSelectionChange, onFormatStateChange, onBusyChange, showToast });
   const editorRef = useRef(null);
+  const editorShellRef = useRef(null);
+  const mathPopoverRef = useRef(null);
   const painterSnapshotRef = useRef(null);
   const painterActiveRef = useRef(false);
-  const migratedRef = useRef(!richBody);
+  const preparedContent = useMemo(() => {
+    if (!richBody) {
+      return {
+        content: richBodyFromLegacyMarkdown(legacyMarkdown, { resolveAssetUrl: (id) => noteApi.getAssetUrl?.(id) || "" }),
+        migrated: true,
+      };
+    }
+    const mathMigration = migrateRichBodyMath(richBody);
+    return { content: mathMigration.richBody || richBody, migrated: mathMigration.changed };
+  }, [noteId]);
+  const migratedRef = useRef(preparedContent.migrated);
+  const pendingMigrationSourceRef = useRef(preparedContent.migrated ? JSON.stringify(richBody) : null);
   const mountedContentEmittedRef = useRef(false);
+  const [mathDraft, setMathDraft] = useState(null);
 
   callbacksRef.current = { onChange, onBlur, onSelectionChange, onFormatStateChange, onBusyChange, showToast };
 
-  const initialContent = useMemo(() => (
-    richBody || richBodyFromLegacyMarkdown(legacyMarkdown, { resolveAssetUrl: (id) => noteApi.getAssetUrl?.(id) || "" })
-  ), [noteId]);
+  const initialContent = preparedContent.content;
 
   const emitSelection = (editor) => {
     callbacksRef.current.onSelectionChange?.(selectionPayload(editor));
@@ -157,10 +315,58 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
     }
   };
 
+  const openExistingMath = (node, pos, type) => {
+    if (readOnly || !editorRef.current) return false;
+    setMathDraft({
+      id: `${type}-${pos}-${Date.now()}`,
+      existing: true,
+      type,
+      pos,
+      range: null,
+      latex: String(node.attrs?.latex || ""),
+      anchor: mathAnchor(editorRef.current, pos),
+    });
+    return true;
+  };
+
+  const openNewMath = () => {
+    const currentEditor = editorRef.current;
+    if (readOnly || !currentEditor) return false;
+    const { from, to } = currentEditor.state.selection;
+    const selected = from === to ? "" : currentEditor.state.doc.textBetween(from, to, " ").trim();
+    setMathDraft({
+      id: `new-${Date.now()}`,
+      existing: false,
+      type: selected ? "inline" : "block",
+      pos: null,
+      range: { from, to },
+      latex: selected,
+      anchor: mathAnchor(currentEditor),
+    });
+    return true;
+  };
+
+  const commitMathDraft = () => {
+    const currentEditor = editorRef.current;
+    const draft = mathDraft;
+    if (!currentEditor || !draft) return false;
+    const latex = draft.latex.trim();
+    let applied = false;
+    if (draft.existing) applied = replaceMathNode(currentEditor, draft, latex);
+    else if (latex) {
+      const node = { type: draft.type === "inline" ? "inlineMath" : "blockMath", attrs: { latex } };
+      applied = currentEditor.chain().focus().setTextSelection(draft.range).insertContent(node).run();
+    } else applied = true;
+    setMathDraft(null);
+    return applied;
+  };
+
   const editor = useEditor({
     extensions: createEditorExtensions({
       resolveAssetUrl: (id) => noteApi.getAssetUrl?.(id) || "",
       cancelPainter: () => cancelPainter(),
+      onMathClick: openExistingMath,
+      openMathEditor: openNewMath,
     }),
     content: initialContent,
     editable: !readOnly,
@@ -173,12 +379,24 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
         spellcheck: "true",
         autocapitalize: "sentences",
       },
+      clipboardTextSerializer: clipboardTextFromSlice,
+      transformPasted(slice, view) {
+        return migratePastedMathSlice(slice, view.state.schema);
+      },
       handlePaste(_view, event) {
         if (readOnly) return false;
         const files = [...(event.clipboardData?.files || [])];
-        if (!files.some((file) => IMAGE_TYPES.has(file.type))) return false;
+        if (files.some((file) => IMAGE_TYPES.has(file.type))) {
+          event.preventDefault();
+          void addImages(files);
+          return true;
+        }
+        const text = event.clipboardData?.getData("text/plain") || "";
+        const html = event.clipboardData?.getData("text/html") || "";
+        if (!containsMathMarkup(text) || html.trim()) return false;
+        const content = richBodyFromLegacyMarkdown(text, { resolveAssetUrl: (id) => noteApi.getAssetUrl?.(id) || "" });
         event.preventDefault();
-        void addImages(files);
+        editorRef.current?.chain().focus().insertContent(content.content || []).run();
         return true;
       },
       handleDrop(view, event) {
@@ -225,12 +443,39 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
 
   useEffect(() => {
     if (!editor || !richBody) return;
+    if (pendingMigrationSourceRef.current === JSON.stringify(richBody)) return;
+    pendingMigrationSourceRef.current = null;
     if (JSON.stringify(editor.getJSON()) === JSON.stringify(richBody)) return;
     editor.commands.setContent(richBody, { emitUpdate: false });
     emitSelection(editor);
   }, [editor, richBody]);
 
   useEffect(() => () => cancelPainter({ quiet: true }), [noteId]);
+
+  useEffect(() => {
+    if (!mathDraft) return undefined;
+    const closeOnOutside = (event) => {
+      if (mathPopoverRef.current?.contains(event.target)) return;
+      commitMathDraft();
+    };
+    document.addEventListener("pointerdown", closeOnOutside, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutside, true);
+  }, [mathDraft]);
+
+  useEffect(() => {
+    if (!mathDraft) return undefined;
+    const reposition = () => setMathDraft((current) => current ? {
+      ...current,
+      anchor: mathAnchor(editorRef.current, current.existing ? current.pos : null),
+    } : current);
+    const host = editorShellRef.current?.querySelector(".rich-note-editor-host");
+    window.addEventListener("resize", reposition);
+    host?.addEventListener("scroll", reposition, { passive: true });
+    return () => {
+      window.removeEventListener("resize", reposition);
+      host?.removeEventListener("scroll", reposition);
+    };
+  }, [mathDraft?.id]);
 
   useImperativeHandle(forwardedRef, () => ({
     applyInline(kind, value = "") {
@@ -272,6 +517,9 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       }
       return editor.chain().focus().setLink({ href }).run();
     },
+    openMathEditor() {
+      return openNewMath();
+    },
     startFormatPainter() {
       if (!editor || readOnly) return false;
       painterSnapshotRef.current = snapshotForPainter(editor);
@@ -289,5 +537,19 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
     },
   }), [editor, readOnly]);
 
-  return <EditorContent editor={editor} className="rich-note-editor-host" />;
+  return (
+    <div ref={editorShellRef} className="rich-note-editor-shell">
+      <EditorContent editor={editor} className="rich-note-editor-host" />
+      {mathDraft ? (
+        <MathEditorPopover
+          draft={mathDraft}
+          popoverRef={mathPopoverRef}
+          onChange={(latex) => setMathDraft((current) => current ? { ...current, latex } : current)}
+          onTypeChange={(type) => setMathDraft((current) => current ? { ...current, type } : current)}
+          onCommit={commitMathDraft}
+          onCancel={() => setMathDraft(null)}
+        />
+      ) : null}
+    </div>
+  );
 });

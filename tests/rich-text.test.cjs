@@ -4,6 +4,7 @@ const {
   emptyRichBody,
   isRichBody,
   markdownFromRichBody,
+  migrateMathInRichBody,
   plainTextFromRichBody,
   stripOwnFormatMarkers,
 } = require("../shared/rich-text.cjs");
@@ -70,6 +71,57 @@ test("clean Markdown export keeps semantics and drops visual-only font metadata"
   assert.equal(markdown, "## **研究设计**\n\n- [x] 核对变量");
   assert.doesNotMatch(markdown, /font|span|Times New Roman|20px|<u>/i);
   assert.equal(plainTextFromRichBody(formattedDocument), "研究设计\n核对变量");
+});
+
+test("math nodes validate, remain searchable, and export as portable Markdown", () => {
+  const document = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "行内 " },
+          { type: "inlineMath", attrs: { latex: "x^2" } },
+        ],
+      },
+      { type: "blockMath", attrs: { latex: "y=\\begin{cases}1&\\text{是}\\\\0&\\text{否}\\end{cases}" } },
+    ],
+  };
+  assert.equal(isRichBody(document), true);
+  assert.equal(markdownFromRichBody(document), "行内 $x^2$\n\n$$\ny=\\begin{cases}1&\\text{是}\\\\0&\\text{否}\\end{cases}\n$$");
+  assert.match(plainTextFromRichBody(document), /begin\{cases\}/);
+  assert.equal(isRichBody({ type: "doc", content: [{ type: "blockMath", attrs: { latex: "" } }] }), false);
+  assert.equal(isRichBody({ type: "doc", content: [{ type: "inlineMath", attrs: { latex: "x", onclick: "bad" } }] }), false);
+});
+
+test("existing rich text migrates standard delimiters and only strong legacy bracket formulas", () => {
+  const legacy = {
+    type: "doc",
+    content: [
+      { type: "paragraph", content: [{ type: "text", text: "结果为 $x^2$，金额 $100$ 不转换。" }] },
+      { type: "paragraph", content: [{ type: "text", text: "\\[y=\\begin{cases}1 & \\text{是}\\\\0 & \\text{否}\\end{cases}\\]" }] },
+      { type: "paragraph", content: [{ type: "text", text: "[普通括号]" }] },
+      {
+        type: "bulletList",
+        content: [{
+          type: "listItem",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "$$列表中的原文$$" }] }],
+        }],
+      },
+      { type: "codeBlock", attrs: { language: null }, content: [{ type: "text", text: "$code$" }] },
+    ],
+  };
+  const migrated = migrateMathInRichBody(legacy);
+  assert.equal(migrated.changed, true);
+  assert.equal(migrated.richBody.content[0].content[1].type, "inlineMath");
+  assert.equal(
+    migrated.richBody.content[0].content.filter((node) => node.type === "text").map((node) => node.text).join(""),
+    "结果为 ，金额 $100$ 不转换。",
+  );
+  assert.equal(migrated.richBody.content[1].type, "blockMath");
+  assert.equal(migrated.richBody.content[2].content[0].text, "[普通括号]");
+  assert.equal(migrated.richBody.content[3].content[0].content[0].content[0].text, "$$列表中的原文$$");
+  assert.equal(migrated.richBody.content[4].content[0].text, "$code$");
 });
 
 test("only Note-owned legacy markers are removed from plain legacy text", () => {

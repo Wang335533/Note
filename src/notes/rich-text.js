@@ -1,16 +1,20 @@
-import { Extension } from "@tiptap/core";
+import { Extension, InputRule } from "@tiptap/core";
 import { generateJSON } from "@tiptap/html";
+import { BlockMath, InlineMath } from "@tiptap/extension-mathematics";
 import Image from "@tiptap/extension-image";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
+import { Fragment, Slice } from "@tiptap/pm/model";
+import { TextSelection } from "@tiptap/pm/state";
 import { marked } from "marked";
+import "katex/dist/katex.min.css";
 import * as richTextModule from "desktop-note/rich-text";
 import { attachmentIdFromUrl } from "desktop-note/library-files";
 
-const { emptyRichBody, normalizeRichBody } = richTextModule;
+const { emptyRichBody, migrateMathInRichBody, normalizeRichBody } = richTextModule;
 
 export const FONT_OPTIONS = Object.freeze([
   { value: "", label: "默认", family: "" },
@@ -71,6 +75,97 @@ const EscapeCancelsPainter = Extension.create({
   },
 });
 
+const NoteInlineMath = InlineMath.extend({
+  addInputRules() {
+    return [];
+  },
+});
+
+const NoteBlockMath = BlockMath.extend({
+  addInputRules() {
+    return [];
+  },
+});
+
+function replaceMathInput({ state, range, latex, type, trailingSpace = false }) {
+  const value = String(latex || "").trim();
+  if (!value || (type === "inlineMath" && /^\d+(?:[.,]\d+)?$/.test(value))) return;
+  const nodeType = state.schema.nodes[type];
+  if (!nodeType || state.selection.$from.parent.type.name === "codeBlock") return;
+  const { tr } = state;
+  if (type === "inlineMath") {
+    const nodes = [nodeType.create({ latex: value })];
+    if (trailingSpace) nodes.push(state.schema.text(" "));
+    tr.replaceWith(range.from, range.to, Fragment.fromArray(nodes));
+    return;
+  }
+  const $from = state.doc.resolve(range.from);
+  const consumesHost = $from.depth > 0
+    && $from.parent.isTextblock
+    && range.from === $from.start()
+    && range.to === $from.end();
+  const canReplaceHost = consumesHost
+    && $from.node(-1).canReplaceWith($from.index(-1), $from.indexAfter(-1), nodeType);
+  const replacement = canReplaceHost ? { from: $from.before(), to: $from.after() } : range;
+  tr.replaceWith(replacement.from, replacement.to, nodeType.create({ latex: value }));
+}
+
+function convertCurrentMathSource(editor) {
+  const { $from, empty } = editor.state.selection;
+  if (!empty || !$from.parent.isTextblock || $from.parent.type.name === "codeBlock") return false;
+  const source = $from.parent.textBetween(0, $from.parent.content.size, "\n", "\n");
+  if (!/[\\$]/.test(source)) return false;
+  const candidate = migrateMathInRichBody({
+    type: "doc",
+    content: [$from.parent.toJSON()],
+  });
+  if (!candidate.changed || !candidate.richBody?.content?.length) return false;
+  const replacement = candidate.richBody.content.map((node) => editor.schema.nodeFromJSON(node));
+  if (replacement.some((node) => node.type.name === "blockMath")
+    && !$from.node(-1).canReplaceWith($from.index(-1), $from.indexAfter(-1), editor.schema.nodes.blockMath)) return false;
+  const tail = editor.schema.nodes.paragraph.create();
+  const from = $from.before();
+  const to = $from.after();
+  const tr = editor.state.tr.replaceWith(from, to, Fragment.fromArray([...replacement, tail]));
+  const tailStart = from + replacement.reduce((sum, node) => sum + node.nodeSize, 0);
+  tr.setSelection(TextSelection.near(tr.doc.resolve(tailStart + 1), 1));
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+const NoteMathInput = Extension.create({
+  name: "noteMathInput",
+  addOptions() {
+    return { openMathEditor: () => false };
+  },
+  addInputRules() {
+    return [
+      new InputRule({
+        find: /^\$\$([\s\S]+?)\$\$\s$/,
+        handler: ({ state, range, match }) => replaceMathInput({ state, range, latex: match[1], type: "blockMath" }),
+      }),
+      new InputRule({
+        find: /^\\\[([\s\S]+?)\\\]\s$/,
+        handler: ({ state, range, match }) => replaceMathInput({ state, range, latex: match[1], type: "blockMath" }),
+      }),
+      new InputRule({
+        find: /(?<![\\$])\$([^$\n]+?)(?<!\\)\$\s$/,
+        handler: ({ state, range, match }) => replaceMathInput({ state, range, latex: match[1], type: "inlineMath", trailingSpace: true }),
+      }),
+      new InputRule({
+        find: /\\\(([^\n]+?)\\\)\s$/,
+        handler: ({ state, range, match }) => replaceMathInput({ state, range, latex: match[1], type: "inlineMath", trailingSpace: true }),
+      }),
+    ];
+  },
+  addKeyboardShortcuts() {
+    return {
+      Enter: () => convertCurrentMathSource(this.editor),
+      "Mod-Shift-e": () => this.options.openMathEditor(),
+    };
+  },
+});
+
 const NoteImage = Image.extend({
   addOptions() {
     return {
@@ -105,7 +200,20 @@ const NoteImage = Image.extend({
   },
 });
 
-export function createEditorExtensions({ resolveAssetUrl = () => "", cancelPainter = () => false } = {}) {
+export function createEditorExtensions({
+  resolveAssetUrl = () => "",
+  cancelPainter = () => false,
+  onMathClick = () => false,
+  openMathEditor = () => false,
+} = {}) {
+  const katexOptions = {
+    displayMode: false,
+    throwOnError: true,
+    strict: "ignore",
+    trust: false,
+    maxExpand: 1000,
+    output: "htmlAndMathml",
+  };
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
@@ -120,6 +228,9 @@ export function createEditorExtensions({ resolveAssetUrl = () => "", cancelPaint
     FontSize,
     TaskList,
     TaskItem.configure({ nested: true }),
+    NoteInlineMath.configure({ onClick: (node, pos) => onMathClick(node, pos, "inline"), katexOptions }),
+    NoteBlockMath.configure({ onClick: (node, pos) => onMathClick(node, pos, "block"), katexOptions }),
+    NoteMathInput.configure({ openMathEditor }),
     NoteImage.configure({ inline: false, allowBase64: false, resolveAssetUrl }),
     Placeholder.configure({ placeholder: "写下正文…" }),
     EscapeCancelsPainter.configure({ cancelPainter }),
@@ -215,12 +326,70 @@ function protectOwnPairs(markdown) {
   return prepared + source.slice(cursor);
 }
 
+function escapeHtmlAttribute(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function mathTokens(source) {
+  const codeRanges = markdownCodeRanges(source);
+  const overlapsCode = (start, end) => codeRanges.some((range) => start < range.end && end > range.start);
+  const tokens = [];
+  const addMatches = (pattern, type, latexIndex = 1) => {
+    for (const match of source.matchAll(pattern)) {
+      const start = match.index;
+      const end = start + match[0].length;
+      const latex = String(match[latexIndex] || "").trim();
+      if (!latex || overlapsCode(start, end) || tokens.some((token) => start < token.end && end > token.start)) continue;
+      if (type === "inline" && match[0].startsWith("$") && /^\d+(?:[.,]\d+)?$/.test(latex)) continue;
+      tokens.push({ start, end, type, latex });
+    }
+  };
+  addMatches(/\$\$([\s\S]+?)\$\$/g, "block");
+  addMatches(/\\\[([\s\S]+?)\\\]/g, "block");
+  addMatches(/\\\(([^\n]+?)\\\)/g, "inline");
+  addMatches(/(?<![\\$])\$([^$\n]+?)(?<!\\)\$(?!\$)/g, "inline");
+  return tokens.sort((left, right) => left.start - right.start);
+}
+
+export function containsMathMarkup(value) {
+  return mathTokens(String(value || "")).length > 0;
+}
+
+function protectMathMarkup(markdown) {
+  const source = String(markdown || "");
+  const tokens = mathTokens(source);
+  if (!tokens.length) return source;
+  let cursor = 0;
+  let prepared = "";
+  for (const token of tokens) {
+    prepared += source.slice(cursor, token.start);
+    const latex = escapeHtmlAttribute(token.latex);
+    prepared += token.type === "block"
+      ? `\n\n<div data-type="block-math" data-latex="${latex}"></div>\n\n`
+      : `<span data-type="inline-math" data-latex="${latex}"></span>`;
+    cursor = token.end;
+  }
+  return prepared + source.slice(cursor);
+}
+
 function safeHtmlFromMarkdown(markdown) {
-  const parsed = new DOMParser().parseFromString(marked.parse(protectOwnPairs(markdown), {
+  const prepared = protectMathMarkup(protectOwnPairs(markdown));
+  const parsed = new DOMParser().parseFromString(marked.parse(prepared, {
     gfm: true,
     breaks: false,
   }), "text/html");
   parsed.querySelectorAll("script, style, iframe, object, embed, form, meta, link").forEach((node) => node.remove());
+  parsed.querySelectorAll('[data-type="inline-math"], [data-type="block-math"]').forEach((node) => {
+    const latex = node.getAttribute("data-latex") || "";
+    if (!latex.trim()) node.remove();
+    for (const attribute of [...node.attributes]) {
+      if (!["data-type", "data-latex"].includes(attribute.name)) node.removeAttribute(attribute.name);
+    }
+  });
   parsed.querySelectorAll("a[href]").forEach((anchor) => {
     if (!/^(?:https?:|mailto:)/i.test(anchor.getAttribute("href") || "")) anchor.removeAttribute("href");
   });
@@ -282,7 +451,53 @@ export function richBodyFromLegacyMarkdown(markdown, options = {}) {
     safeHtmlFromMarkdown(markdown),
     createEditorExtensions(options),
   ));
-  return normalizeRichBody(value) || emptyRichBody();
+  const migrated = migrateMathInRichBody(value);
+  return normalizeRichBody(migrated.richBody) || emptyRichBody();
+}
+
+export function migrateRichBodyMath(value) {
+  return migrateMathInRichBody(value);
+}
+
+export function migratePastedMathSlice(slice, schema) {
+  if (!slice?.content || !schema) return slice;
+  const migrated = migrateMathInRichBody({
+    type: "doc",
+    content: slice.content.toJSON(),
+  });
+  if (!migrated.changed || !migrated.richBody?.content) return slice;
+  try {
+    return new Slice(Fragment.fromJSON(schema, migrated.richBody.content), slice.openStart, slice.openEnd);
+  } catch {
+    return slice;
+  }
+}
+
+export function clipboardTextFromSlice(slice) {
+  const output = [];
+  const append = (value) => {
+    if (!value) return;
+    output.push(value);
+  };
+  const endBlock = () => {
+    const tail = output.at(-1) || "";
+    if (!tail.endsWith("\n")) output.push("\n");
+  };
+  const visit = (node) => {
+    const type = node.type?.name;
+    if (node.isText) append(node.text || "");
+    else if (type === "hardBreak") append("\n");
+    else if (type === "inlineMath") append(`$${String(node.attrs?.latex || "").trim()}$`);
+    else if (type === "blockMath") {
+      append(`$$\n${String(node.attrs?.latex || "").trim()}\n$$`);
+      endBlock();
+    } else {
+      node.forEach?.((child) => visit(child));
+      if (["paragraph", "heading", "blockquote", "listItem", "taskItem", "codeBlock"].includes(type)) endBlock();
+    }
+  };
+  slice?.content?.forEach((node) => visit(node));
+  return output.join("").replace(/\n{3,}/g, "\n\n").trimEnd();
 }
 
 export function formatStateForEditor(editor, painterActive = false) {

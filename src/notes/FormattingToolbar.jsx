@@ -190,6 +190,10 @@ export function FormattingToolbar({
             <FormatButton label="删除线" active={formatState.strike} onClick={() => applyInline("strike")}><TextStrikethrough size={17} /></FormatButton>
             <FormatButton label="引用" active={formatState.block === "quote"} onClick={() => applyBlock("quote")}><Quotes size={17} /></FormatButton>
             <FormatButton label="行内代码" active={formatState.code} onClick={() => applyInline("code")}><Code size={17} /></FormatButton>
+            <FormatButton label="插入公式（Ctrl + Shift + E）" onClick={() => {
+              editorRef.current?.openMathEditor?.();
+              setMoreOpen(false);
+            }}><span className="formula-tool-symbol" aria-hidden="true">∑</span></FormatButton>
             <FormatButton label="格式刷（使用一次）" active={formatState.painterActive} onClick={() => {
               editorRef.current?.startFormatPainter?.();
               setMoreOpen(false);

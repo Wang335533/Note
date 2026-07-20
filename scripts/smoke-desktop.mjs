@@ -256,8 +256,48 @@ try {
     throw new Error(`Unexpected rich editor state: ${JSON.stringify(richEditor)}`);
   }
 
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    const more = document.querySelector('button[aria-label="更多格式"]');
+    if (!document.querySelector('.more-format-popover')) more?.click();
+    document.querySelector('button[aria-label^="插入公式"]')?.click();
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.math-editor-popover textarea'))`, "the formula editor");
+  await evaluate(cdp.send, `(() => {
+    const input = document.querySelector('.math-editor-popover textarea');
+    const value = String.raw\`x=\\begin{cases}1 & \\text{yes}\\\\0 & \\text{no}\\end{cases}\`;
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.math-editor-preview .katex'))`, "the KaTeX formula preview");
+  await evaluate(cdp.send, `document.querySelector('.math-editor-popover button.is-primary')?.click()`);
+  const formulaEditor = await waitFor(
+    cdp.send,
+    `(() => {
+      const formula = document.querySelector('[data-type="inline-math"], [data-type="block-math"]');
+      if (!formula?.querySelector('.katex')) return null;
+      return {
+        type: formula.getAttribute('data-type'),
+        latex: formula.getAttribute('data-latex'),
+        rendered: Boolean(formula.querySelector('.katex')),
+        rawDelimiterVisible: /\\$\\$|\\\\\\[/.test(formula.textContent),
+      };
+    })()`,
+    "the persisted KaTeX formula",
+  );
+  if (!formulaEditor.rendered || formulaEditor.rawDelimiterVisible || !formulaEditor.latex.includes("begin{cases}")) {
+    throw new Error(`Unexpected formula editor state: ${JSON.stringify(formulaEditor)}`);
+  }
+
   if (cdp.exceptions.length) throw new Error(`Renderer exceptions: ${cdp.exceptions.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, todo, notes, legacyMigration, legacyPersistence, richEditor }, null, 2));
+  console.log(JSON.stringify({ ok: true, todo, notes, legacyMigration, legacyPersistence, richEditor, formulaEditor }, null, 2));
 } catch (error) {
   if (processOutput.trim()) console.error(processOutput.trim());
   throw error;
