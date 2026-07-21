@@ -6,7 +6,7 @@
 
 一个嵌在 Windows 桌面上的本地 Note 框架：`Todo` 保留“一页今日”的直接感，`Notes` 提供独立、长期、结构化的富文本笔记库。两者是同一应用中的同级模块，内容可以互相链接，但生命周期彼此独立。
 
-2.3.0 延续暖白、炭黑、浅灰与陶土橙的克制视觉，并补齐更接近成熟桌面笔记应用的组织与排版能力：笔记本内可创建一级文件夹，笔记列表拥有常驻的新建入口，段落可设置 Word 式行距；窗口仍可从四边和四角自由缩放，并可一键最大化到完整工作区。Notes 在窄窗中使用列表/编辑器导航，在宽窗和最大化状态下自动切换为双栏主从布局。
+2.3.1 延续暖白、炭黑、浅灰与陶土橙的克制视觉，并补齐更接近成熟桌面笔记应用的组织与排版能力：笔记本内可创建一级文件夹，笔记列表拥有常驻的新建入口，段落可设置 Word 式行距；窗口仍可从四边和四角自由缩放，并可一键最大化到完整工作区。本次补丁同时修复了应用恢复到一篇空白笔记时，已销毁的编辑器实例可能引发启动白屏的问题。
 
 ## 下载
 
@@ -90,17 +90,17 @@ npm run package:fast
 GitHub Actions 会在每次推送或拉取请求时运行测试和生产构建。正式版本采用语义化标签发布：
 
 1. 更新 `package.json` 与 `package-lock.json` 中的版本号，并完成测试。
-2. 提交代码并创建同版本标签，例如 `v2.3.0`。
+2. 提交代码并创建同版本标签，例如 `v2.3.1`。
 3. 推送提交和标签；Release 工作流会在 Windows 环境重新安装锁定依赖、运行测试、构建 NSIS 安装包、生成 SHA-256 校验文件并发布正式 GitHub Release。
 
 ```powershell
 npm version patch --no-git-tag-version
 npm test
 git add package.json package-lock.json
-git commit -m "release: v2.3.0"
-git tag v2.3.0
+git commit -m "release: v2.3.1"
+git tag v2.3.1
 git push origin main
-git push origin v2.3.0
+git push origin v2.3.1
 ```
 
 只有 `v主版本.次版本.修订号` 标签会触发正式发布。`release/` 始终保持在 Git 忽略列表中，安装包只作为 GitHub Release 附件保存。
