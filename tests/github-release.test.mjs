@@ -10,12 +10,14 @@ const release = await readFile(new URL(".github/workflows/release.yml", root), "
 
 test("public package metadata points to the canonical GitHub repository", () => {
   assert.equal(packageJson.license, "MIT");
+  assert.equal(packageJson.engines?.node, ">=22.12.0");
   assert.equal(packageJson.repository?.url, "git+https://github.com/Wang335533/Note.git");
   assert.equal(packageJson.bugs?.url, "https://github.com/Wang335533/Note/issues");
 });
 
 test("CI uses locked dependencies with read-only repository access", () => {
   assert.match(ci, /permissions:\s*\n\s*contents: read/);
+  assert.match(ci, /node-version: 24/);
   assert.match(ci, /npm ci/);
   assert.match(ci, /npm test/);
   assert.match(ci, /npm run build/);
@@ -25,6 +27,7 @@ test("tagged Windows releases are version-checked and published with a checksum"
   assert.match(release, /tags:\s*\n\s*- ["']v\*\.\*\.\*["']/);
   assert.match(release, /permissions:\s*\n\s*contents: write/);
   assert.match(release, /GITHUB_REF_NAME/);
+  assert.match(release, /node-version: 24/);
   assert.match(release, /npm run package:installer/);
   assert.match(release, /Get-FileHash/);
   assert.match(release, /SHA256SUMS\.txt/);

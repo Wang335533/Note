@@ -61,7 +61,7 @@ Note 当前未使用商业代码签名证书，因此 Windows 首次运行时可
 
 ## 本地开发
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 22.12 或更高版本，推荐使用当前的 Node.js 24 LTS。
 
 ```powershell
 npm install
