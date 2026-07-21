@@ -101,9 +101,9 @@ function validMarkAttributes(mark) {
     return Boolean(attrs?.fontFamily || attrs?.fontSize);
   }
   if (mark.type === "link") {
-    if (!hasOnlyKeys(attrs, ["href", "target", "rel", "class"]) || typeof attrs?.href !== "string") return false;
+    if (!hasOnlyKeys(attrs, ["href", "target", "rel", "class", "title"]) || typeof attrs?.href !== "string") return false;
     if (!isSafeStoredUrl(attrs.href)) return false;
-    return ["target", "rel", "class"].every((key) => attrs[key] === undefined || attrs[key] === null || typeof attrs[key] === "string");
+    return ["target", "rel", "class", "title"].every((key) => attrs[key] === undefined || attrs[key] === null || typeof attrs[key] === "string");
   }
   return hasOnlyKeys(attrs, []);
 }
@@ -141,7 +141,7 @@ function validateRichNode(node, budget, depth = 0, parentType = null) {
   }
 
   if (node.marks !== undefined) {
-    if (!Array.isArray(node.marks) || node.type !== "text") return false;
+    if (!Array.isArray(node.marks) || !INLINE_NODE_TYPES.has(node.type)) return false;
     if (parentType === "codeBlock" && node.marks.length) return false;
     for (const mark of node.marks) {
       if (!mark || typeof mark !== "object" || Array.isArray(mark) || !RICH_MARK_TYPES.has(mark.type)) return false;

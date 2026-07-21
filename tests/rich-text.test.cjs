@@ -66,6 +66,46 @@ test("rich documents validate with a strict node and mark allowlist", () => {
   }), false);
 });
 
+test("Tiptap inline leaf nodes keep supported formatting across hard breaks", () => {
+  const textStyle = { type: "textStyle", attrs: { fontFamily: "KaiTi", fontSize: null } };
+  assert.equal(isRichBody({
+    type: "doc",
+    content: [{
+      type: "paragraph",
+      content: [
+        { type: "text", text: "第一行", marks: [textStyle] },
+        { type: "hardBreak", marks: [textStyle] },
+        { type: "text", text: "第二行", marks: [textStyle] },
+        { type: "inlineMath", attrs: { latex: "x^2" }, marks: [{ type: "bold" }] },
+      ],
+    }],
+  }), true);
+  assert.equal(isRichBody({
+    type: "doc",
+    marks: [{ type: "bold" }],
+    content: [{ type: "paragraph" }],
+  }), false);
+});
+
+test("Tiptap link attributes accept title without weakening URL validation", () => {
+  const linkedText = (attrs) => ({
+    type: "doc",
+    content: [{
+      type: "paragraph",
+      content: [{ type: "text", text: "链接", marks: [{ type: "link", attrs }] }],
+    }],
+  });
+  assert.equal(isRichBody(linkedText({
+    href: "https://example.com/research",
+    target: "_blank",
+    rel: "noopener noreferrer nofollow",
+    class: null,
+    title: null,
+  })), true);
+  assert.equal(isRichBody(linkedText({ href: "javascript:alert(1)", title: null })), false);
+  assert.equal(isRichBody(linkedText({ href: "https://example.com", download: true })), false);
+});
+
 test("clean Markdown export keeps semantics and drops visual-only font metadata", () => {
   const markdown = markdownFromRichBody(formattedDocument);
   assert.equal(markdown, "## **研究设计**\n\n- [x] 核对变量");
