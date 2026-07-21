@@ -15,6 +15,11 @@ test("public package metadata points to the canonical GitHub repository", () => 
   assert.equal(packageJson.bugs?.url, "https://github.com/Wang335533/Note/issues");
 });
 
+test("known vulnerable development dependencies stay on patched versions", () => {
+  assert.equal(packageJson.devDependencies?.vite, "6.4.3");
+  assert.equal(packageJson.overrides?.["shell-quote"], "1.10.0");
+});
+
 test("CI uses locked dependencies with read-only repository access", () => {
   assert.match(ci, /permissions:\s*\n\s*contents: read/);
   assert.match(ci, /node-version: 24/);
