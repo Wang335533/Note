@@ -33,6 +33,7 @@ const NOTE_FONT_VALUES = new Set(["songti", "kaiti", "simhei", "times-new-roman"
 const NOTE_SIZE_VALUES = new Set(["12", "14", "16", "20", "24"]);
 const NOTE_FONT_FAMILIES = new Set(["SimSun", "KaiTi", "SimHei", "Times New Roman", "Cascadia Code"]);
 const NOTE_FONT_SIZES = new Set(["12px", "14px", "16px", "20px", "24px"]);
+const NOTE_LINE_HEIGHTS = new Set(["1", "1.15", "1.5", "1.72", "2", "2.5", "3"]);
 const BLOCK_NODE_TYPES = new Set(["paragraph", "heading", "blockquote", "bulletList", "orderedList", "taskList", "codeBlock", "horizontalRule", "image", "blockMath"]);
 const INLINE_NODE_TYPES = new Set(["text", "hardBreak", "inlineMath"]);
 const MAX_RICH_NODES = 50000;
@@ -71,7 +72,13 @@ function isSafeStoredUrl(value, { image = false } = {}) {
 
 function validNodeAttributes(node) {
   const attrs = node.attrs;
-  if (node.type === "heading") return hasOnlyKeys(attrs, ["level"]) && [1, 2, 3].includes(attrs?.level);
+  if (node.type === "paragraph") {
+    return hasOnlyKeys(attrs, ["lineHeight"])
+      && (attrs?.lineHeight === undefined || attrs.lineHeight === null || NOTE_LINE_HEIGHTS.has(attrs.lineHeight));
+  }
+  if (node.type === "heading") return hasOnlyKeys(attrs, ["level", "lineHeight"])
+    && [1, 2, 3].includes(attrs?.level)
+    && (attrs?.lineHeight === undefined || attrs.lineHeight === null || NOTE_LINE_HEIGHTS.has(attrs.lineHeight));
   if (node.type === "orderedList") return hasOnlyKeys(attrs, ["start", "type"])
     && (attrs?.start === undefined || (Number.isInteger(attrs.start) && attrs.start >= 1))
     && (attrs?.type === undefined || attrs.type === null || typeof attrs.type === "string");

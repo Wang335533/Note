@@ -480,7 +480,7 @@ async function inspectMarkdownImport(filePaths) {
   return { records, imageCount };
 }
 
-async function importMarkdownFiles(destinationNotebookId = null) {
+async function importMarkdownFiles(destinationNotebookId = null, destinationFolderId = null) {
   const selection = await dialog.showOpenDialog(mainWindow, {
     title: "导入 Markdown 笔记",
     defaultPath: app.getPath("documents"),
@@ -544,6 +544,7 @@ async function importMarkdownFiles(destinationNotebookId = null) {
       next = applyOperation(next, {
         type: "note:add",
         notebookId: destinationNotebookId,
+        folderId: destinationFolderId,
         title: deriveImportedTitle(path.basename(record.file), body),
         body,
       }, new Date());
@@ -587,6 +588,7 @@ function publicState() {
       shortcutFailures: [...shortcutFailures],
       desktopHostError,
       desktopTemporarilyLifted,
+      isMaximized: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isMaximized()),
     },
   };
 }
@@ -625,9 +627,13 @@ function toggleWindow() {
 async function createBlankNoteAndShow() {
   const candidateNotebookId = state?.settings?.notesLastNotebookId;
   const notebook = candidateNotebookId ? state?.notebooks?.[candidateNotebookId] : null;
+  const folder = state?.settings?.notesLastFolderId
+    ? state?.folders?.[state.settings.notesLastFolderId]
+    : null;
   const result = await mutate({
     type: "note:add",
     notebookId: notebook && !notebook.trashedAt ? notebook.id : null,
+    folderId: folder && !folder.trashedAt && folder.notebookId === notebook?.id ? folder.id : null,
   });
   if (result.ok || state.settings.activeModule === "notes") await showWindow({ temporaryForeground: true });
   return result;
@@ -648,7 +654,12 @@ async function applyWindowMode({ temporaryForeground = false, persistFallback = 
   let finalStatus = currentSaveStatus;
   nativeModeTransition = true;
   try {
-    if (mode === "desktop" && !temporaryForeground) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.setAlwaysOnTop(false, "normal");
+      mainWindow.setSkipTaskbar(false);
+      desktopTemporarilyLifted = mode === "desktop";
+      desktopHostError = null;
+    } else if (mode === "desktop" && !temporaryForeground) {
       mainWindow.setAlwaysOnTop(false, "normal");
       mainWindow.setSkipTaskbar(true);
       if (epoch !== windowModeEpoch || !mainWindow || mainWindow.isDestroyed()) return;
@@ -805,8 +816,6 @@ function createWindow() {
     ...initialBounds,
     minWidth: WINDOW_METRICS.minWidth,
     minHeight: WINDOW_METRICS.minHeight,
-    maxWidth: WINDOW_METRICS.maxWidth,
-    maxHeight: WINDOW_METRICS.maxHeight,
     show: false,
     frame: false,
     roundedCorners: true,
@@ -814,7 +823,7 @@ function createWindow() {
     resizable: true,
     movable: true,
     minimizable: true,
-    maximizable: false,
+    maximizable: true,
     fullscreenable: false,
     skipTaskbar: false,
     hasShadow: true,
@@ -871,6 +880,7 @@ function createWindow() {
   const revealWindow = () => {
     if (revealRequested || !mainWindow || mainWindow.isDestroyed()) return;
     revealRequested = true;
+    if (state.settings.windowMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
     void applyWindowMode().finally(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       mainWindow.show();
@@ -903,7 +913,8 @@ function createWindow() {
     clearTimeout(boundsTimer);
     boundsTimer = setTimeout(async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
-      const { x, y, width, height } = mainWindow.getBounds();
+      if (mainWindow.isMaximized()) return;
+      const { x, y, width, height } = mainWindow.getNormalBounds();
       const saved = state.settings.windowBounds;
       if (saved?.x === x
         && saved?.y === y
@@ -932,7 +943,33 @@ function createWindow() {
     scheduleWindowBoundsSave();
   });
 
+  const syncMaximizedState = async (maximized) => {
+    if (state.settings.windowMaximized !== maximized) {
+      state = applyOperation(state, { type: "settings:set", key: "windowMaximized", value: maximized });
+      broadcastState("saving");
+      const snapshot = state;
+      try {
+        await persistState(snapshot);
+        if (state.revision === snapshot.revision) sendSaveStatus("saved");
+      } catch (error) {
+        reportError("Unable to save the maximized window state", error);
+        sendSaveStatus("error");
+      }
+    } else broadcastState(currentSaveStatus);
+  };
+
+  mainWindow.on("maximize", () => {
+    void applyWindowMode();
+    void syncMaximizedState(true);
+  });
+  mainWindow.on("unmaximize", () => {
+    void applyWindowMode();
+    void syncMaximizedState(false);
+    scheduleWindowBoundsSave();
+  });
+
   mainWindow.on("blur", () => {
+    if (mainWindow.isMaximized()) return;
     if (!desktopTemporarilyLifted || state.settings.windowMode !== "desktop") return;
     setTimeout(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -1120,7 +1157,7 @@ function registerIpc() {
   });
   handleTrustedIpc("note:add-image", (noteId, payload) => addNoteImage(noteId, payload));
   handleTrustedIpc("note:export-library", () => exportNotesLibrary());
-  handleTrustedIpc("note:import-markdown", (notebookId) => importMarkdownFiles(notebookId));
+  handleTrustedIpc("note:import-markdown", (notebookId, folderId) => importMarkdownFiles(notebookId, folderId));
   handleTrustedIpc("note:export-markdown", async () => {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "导出 Note",
@@ -1146,6 +1183,19 @@ function registerIpc() {
     key: "launchAtLogin",
     value: enabled,
   }));
+  handleTrustedIpc("note:toggle-maximize", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: "窗口不可用" };
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else {
+      if (state.settings.windowMode === "desktop") {
+        desktopTemporarilyLifted = true;
+        mainWindow.setAlwaysOnTop(false, "normal");
+        mainWindow.setSkipTaskbar(false);
+      }
+      mainWindow.maximize();
+    }
+    return { ok: true, maximized: mainWindow.isMaximized() };
+  });
   handleTrustedIpc("note:quit-ready", () => {
     beginQuitFlush();
     return { ok: true };
@@ -1154,7 +1204,7 @@ function registerIpc() {
 
 function captureWindowBoundsInMemory() {
   if (!state || !mainWindow || mainWindow.isDestroyed()) return;
-  const { x, y, width, height } = mainWindow.getBounds();
+  const { x, y, width, height } = mainWindow.getNormalBounds();
   const saved = state.settings.windowBounds;
   if (saved?.x === x
     && saved?.y === y

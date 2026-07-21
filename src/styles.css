@@ -124,6 +124,17 @@ select:focus-visible {
   height: 100%;
 }
 
+.desktop-runtime.is-maximized .note-frame {
+  padding: 0;
+  border-radius: 0;
+}
+
+.desktop-runtime.is-maximized .note-card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .note-card.opaque-card {
   background: #fbfaf8;
   backdrop-filter: none;
@@ -227,6 +238,10 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.window-maximize-button {
+  color: #8b857e;
 }
 
 .note-create-button {

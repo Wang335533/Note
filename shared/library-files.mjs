@@ -103,13 +103,28 @@ export function createLibraryExportPlan(state) {
     notebookFolderById.set(notebook.id, uniqueSegment(preferred, usedFolders, notebook.id.slice(0, 8)));
   }
   const unfiledFolder = uniqueSegment("未分类", usedFolders, "unfiled");
+  const noteFolderById = new Map();
+  const usedNoteFoldersByNotebook = new Map();
+  for (const folder of Object.values(state?.folders || {}).filter((item) => !item.trashedAt)) {
+    const notebookFolder = notebookFolderById.get(folder.notebookId);
+    if (!notebookFolder) continue;
+    if (!usedNoteFoldersByNotebook.has(folder.notebookId)) usedNoteFoldersByNotebook.set(folder.notebookId, new Set());
+    const segment = uniqueSegment(
+      safeFileSegment(folder.name, "文件夹"),
+      usedNoteFoldersByNotebook.get(folder.notebookId),
+      folder.id.slice(0, 8),
+    );
+    noteFolderById.set(folder.id, posixJoin(notebookFolder, segment));
+  }
   const usedNamesByFolder = new Map();
   const notes = [];
 
   for (const note of Object.values(state?.notes || {}).filter((item) => !item.trashedAt)) {
-    const folder = notebookFolderById.get(note.notebookId) || unfiledFolder;
-    if (!usedNamesByFolder.has(folder)) usedNamesByFolder.set(folder, new Set());
-    const usedNames = usedNamesByFolder.get(folder);
+    const destinationFolder = noteFolderById.get(note.folderId)
+      || notebookFolderById.get(note.notebookId)
+      || unfiledFolder;
+    if (!usedNamesByFolder.has(destinationFolder)) usedNamesByFolder.set(destinationFolder, new Set());
+    const usedNames = usedNamesByFolder.get(destinationFolder);
     const preferred = safeFileSegment(note.title || deriveImportedTitle("", note.body), "无标题");
     const noteStem = uniqueSegment(preferred, usedNames, note.id.slice(0, 8));
     const assetDirectory = `${noteStem}.assets`;
@@ -118,14 +133,14 @@ export function createLibraryExportPlan(state) {
       attachmentId: attachment.id,
       sourceRelativePath: attachment.relativePath,
       relativePath: posixJoin(
-        folder,
+        destinationFolder,
         assetDirectory,
         `${safeFileSegment(attachment.id, "image")}${imageExtension(attachment.mimeType)}`,
       ),
     }));
     notes.push({
       noteId: note.id,
-      relativePath: posixJoin(folder, `${noteStem}.md`),
+      relativePath: posixJoin(destinationFolder, `${noteStem}.md`),
       content,
       assets,
     });

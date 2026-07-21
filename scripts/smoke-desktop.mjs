@@ -184,6 +184,21 @@ try {
     throw new Error(`Unexpected Todo workspace state: ${JSON.stringify(todo)}`);
   }
 
+  const maximizeResult = await evaluate(cdp.send, `window.noteDesktop.toggleMaximize()`);
+  if (!maximizeResult?.ok) throw new Error(`Could not maximize the desktop window: ${JSON.stringify(maximizeResult)}`);
+  await waitFor(
+    cdp.send,
+    `document.querySelector('button[aria-label="还原窗口"]')?.getAttribute('aria-label')`,
+    "the maximized desktop window state",
+  );
+  const restoreResult = await evaluate(cdp.send, `window.noteDesktop.toggleMaximize()`);
+  if (!restoreResult?.ok) throw new Error(`Could not restore the desktop window: ${JSON.stringify(restoreResult)}`);
+  await waitFor(
+    cdp.send,
+    `document.querySelector('button[aria-label="最大化窗口"]')?.getAttribute('aria-label')`,
+    "the restored desktop window state",
+  );
+
   await evaluate(cdp.send, `document.querySelector(".module-switch button:last-child")?.click()`);
   const notes = await waitFor(
     cdp.send,
@@ -261,6 +276,30 @@ try {
     const selection = window.getSelection();
     const range = document.createRange();
     range.selectNodeContents(editor);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    const more = document.querySelector('button[aria-label="更多格式"]');
+    if (!document.querySelector('.more-format-popover')) more?.click();
+    const lineHeight = document.querySelectorAll('.more-format-popover select')[2];
+    lineHeight.value = '2';
+    lineHeight.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  const lineHeightEditor = await waitFor(
+    cdp.send,
+    `(() => {
+      const paragraph = document.querySelector('.rich-note-prosemirror p[style*="line-height"]');
+      if (!paragraph) return null;
+      return { style: paragraph.getAttribute('style'), lineHeight: getComputedStyle(paragraph).lineHeight };
+    })()`,
+    "a persisted paragraph line height",
+  );
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
     range.collapse(false);
     selection.removeAllRanges();
     selection.addRange(range);
@@ -297,7 +336,18 @@ try {
   }
 
   if (cdp.exceptions.length) throw new Error(`Renderer exceptions: ${cdp.exceptions.join(" | ")}`);
-  console.log(JSON.stringify({ ok: true, todo, notes, legacyMigration, legacyPersistence, richEditor, formulaEditor }, null, 2));
+  console.log(JSON.stringify({
+    ok: true,
+    todo,
+    notes,
+    maximizeResult,
+    restoreResult,
+    legacyMigration,
+    legacyPersistence,
+    richEditor,
+    lineHeightEditor,
+    formulaEditor,
+  }, null, 2));
 } catch (error) {
   if (processOutput.trim()) console.error(processOutput.trim());
   throw error;

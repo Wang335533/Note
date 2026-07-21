@@ -9,11 +9,12 @@ contextBridge.exposeInMainWorld("noteDesktop", {
   addNoteImage: (noteId, payload) => ipcRenderer.invoke("note:add-image", noteId, payload),
   getAssetUrl: (id) => (/^[A-Za-z0-9._-]+$/.test(id) ? `note-asset://local/${encodeURIComponent(id)}` : ""),
   exportLibrary: () => ipcRenderer.invoke("note:export-library"),
-  importMarkdown: (notebookId) => ipcRenderer.invoke("note:import-markdown", notebookId),
+  importMarkdown: (notebookId, folderId) => ipcRenderer.invoke("note:import-markdown", notebookId, folderId),
   exportMarkdown: () => ipcRenderer.invoke("note:export-markdown"),
   setWindowMode: (mode) => ipcRenderer.invoke("note:set-window-mode", mode),
   setLocked: (locked) => ipcRenderer.invoke("note:set-locked", locked),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke("note:set-launch-at-login", enabled),
+  toggleMaximize: () => ipcRenderer.invoke("note:toggle-maximize"),
   quitReady: () => ipcRenderer.invoke("note:quit-ready"),
   onState: (callback) => {
     const handler = (_event, payload) => callback(payload);

@@ -26,12 +26,12 @@ test("saved window size is restored without forcing an aspect ratio", () => {
   });
 });
 
-test("window size and position stay inside the user-approved limits and work area", () => {
+test("window size and position can fill but never exceed the work area", () => {
   assert.deepEqual(fitWindowBounds({ x: -500, y: 3000, width: 1200, height: 1400 }, workArea), {
     x: 0,
     y: 0,
-    width: WINDOW_METRICS.maxWidth,
-    height: WINDOW_METRICS.maxHeight > workArea.height ? workArea.height : WINDOW_METRICS.maxHeight,
+    width: 1200,
+    height: workArea.height,
   });
   assert.deepEqual(fitWindowBounds({ x: 40, y: 40, width: 200, height: 300 }, workArea), {
     x: 40,

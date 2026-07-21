@@ -354,6 +354,7 @@ test("schema v1 migrates to the notes-capable schema without changing Todo conte
   assert.equal(migrated.schemaVersion, SCHEMA_VERSION);
   assert.equal(migrated.days[migrated.activeDay].tasks[0].text, "保留旧清单");
   assert.deepEqual(migrated.notebooks, {});
+  assert.deepEqual(migrated.folders, {});
   assert.deepEqual(migrated.notes, {});
   assert.equal(migrated.settings.activeModule, "todo");
 });
@@ -421,6 +422,56 @@ test("a trashed notebook supports individual restore before whole-notebook resto
   assert.equal(state.notes["note-two"].notebookId, "notebook-a");
   assert.equal(state.notes["note-two"].trashedAt, null);
   assert.equal(state.notes["note-one"].notebookId, null);
+});
+
+test("one-level folders preserve note location across navigation, trash, restore, and moves", () => {
+  const now = new Date(2026, 6, 21, 14, 0, 0);
+  let state = applyOperation(createInitialState(now), { type: "notebook:add", name: "研究" }, now, {
+    randomUUID: () => "notebook-research",
+  });
+  state = applyOperation(state, { type: "notebook:add", name: "资料" }, now, {
+    randomUUID: () => "notebook-materials",
+  });
+  state = applyOperation(state, { type: "folder:add", notebookId: "notebook-research", name: "机制" }, now, {
+    randomUUID: () => "folder-mechanism",
+  });
+  state = applyOperation(state, {
+    type: "note:add",
+    notebookId: "notebook-research",
+    folderId: "folder-mechanism",
+    title: "中介变量",
+  }, now, { randomUUID: () => "note-mediator" });
+
+  assert.equal(state.notes["note-mediator"].folderId, "folder-mechanism");
+  assert.equal(state.settings.notesLastFolderId, "folder-mechanism");
+  assert.throws(() => applyOperation(state, {
+    type: "notes:navigate",
+    viewId: "notebook-research",
+    folderId: null,
+    noteId: "note-mediator",
+    pane: "editor",
+  }, now), /笔记不在当前视图/);
+
+  state = applyOperation(state, { type: "note:trash", id: "note-mediator" }, now);
+  state = applyOperation(state, { type: "note:restore", id: "note-mediator" }, now);
+  assert.equal(state.notes["note-mediator"].folderId, "folder-mechanism");
+
+  state = applyOperation(state, { type: "folder:trash", id: "folder-mechanism" }, now);
+  assert.ok(state.folders["folder-mechanism"].trashedAt);
+  assert.ok(state.notes["note-mediator"].trashedAt);
+  state = applyOperation(state, { type: "folder:restore", id: "folder-mechanism" }, now);
+  assert.equal(state.notes["note-mediator"].folderId, "folder-mechanism");
+  assert.equal(state.notes["note-mediator"].notebookId, "notebook-research");
+
+  state = applyOperation(state, { type: "folder:move", id: "folder-mechanism", notebookId: "notebook-materials" }, now);
+  assert.equal(state.folders["folder-mechanism"].notebookId, "notebook-materials");
+  assert.equal(state.notes["note-mediator"].notebookId, "notebook-materials");
+  assert.throws(() => applyOperation(state, {
+    type: "folder:add",
+    notebookId: "notebook-materials",
+    parentFolderId: "folder-mechanism",
+    name: "二级",
+  }, now), /仅支持一级文件夹/);
 });
 
 test("permanently deleting a linked note clears task backlinks without deleting the task", () => {

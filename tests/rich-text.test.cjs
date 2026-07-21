@@ -66,6 +66,26 @@ test("rich documents validate with a strict node and mark allowlist", () => {
   }), false);
 });
 
+test("paragraph line spacing is strictly validated and stays out of Markdown", () => {
+  const spaced = {
+    type: "doc",
+    content: [
+      { type: "heading", attrs: { level: 2, lineHeight: "1.5" }, content: [{ type: "text", text: "标题" }] },
+      { type: "paragraph", attrs: { lineHeight: "2" }, content: [{ type: "text", text: "正文" }] },
+    ],
+  };
+  assert.equal(isRichBody(spaced), true);
+  assert.equal(markdownFromRichBody(spaced), "## 标题\n\n正文");
+  assert.equal(isRichBody({
+    type: "doc",
+    content: [{ type: "paragraph", attrs: { lineHeight: "9" }, content: [{ type: "text", text: "坏数据" }] }],
+  }), false);
+  assert.equal(isRichBody({
+    type: "doc",
+    content: [{ type: "codeBlock", attrs: { language: null, lineHeight: "2" }, content: [{ type: "text", text: "code" }] }],
+  }), false);
+});
+
 test("Tiptap inline leaf nodes keep supported formatting across hard breaks", () => {
   const textStyle = { type: "textStyle", attrs: { fontFamily: "KaiTi", fontSize: null } };
   assert.equal(isRichBody({
