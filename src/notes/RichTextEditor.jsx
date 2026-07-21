@@ -205,6 +205,10 @@ function replaceMathNode(editor, draft, latex) {
   return true;
 }
 
+function editorIsReady(editor) {
+  return Boolean(editor && !editor.isDestroyed);
+}
+
 export const RichTextEditor = forwardRef(function RichTextEditor({
   noteId,
   richBody,
@@ -434,10 +438,10 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
     },
   }, [noteId, readOnly]);
 
-  editorRef.current = editor;
+  editorRef.current = editorIsReady(editor) ? editor : null;
 
   useEffect(() => {
-    if (!editor || mountedContentEmittedRef.current) return;
+    if (!editorIsReady(editor) || mountedContentEmittedRef.current) return;
     mountedContentEmittedRef.current = true;
     if (migratedRef.current) {
       migratedRef.current = false;
@@ -446,7 +450,10 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
   }, [editor, noteId]);
 
   useEffect(() => {
-    if (!editor || !richBody) return;
+    // useEditor may expose the previous instance for one render while a keyed
+    // editor is being replaced. Tiptap clears commandManager during destroy,
+    // so never synchronize content through that stale instance.
+    if (!editorIsReady(editor) || !richBody) return;
     if (pendingMigrationSourceRef.current === JSON.stringify(richBody)) return;
     pendingMigrationSourceRef.current = null;
     if (JSON.stringify(editor.getJSON()) === JSON.stringify(richBody)) return;
@@ -483,7 +490,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
 
   useImperativeHandle(forwardedRef, () => ({
     applyInline(kind, value = "") {
-      if (!editor || readOnly) return false;
+      if (!editorIsReady(editor) || readOnly) return false;
       let chain = editor.chain().focus();
       if (kind === "bold") chain = chain.toggleBold();
       else if (kind === "italic") chain = chain.toggleItalic();
@@ -496,7 +503,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       return chain.run();
     },
     applyBlock(type) {
-      if (!editor || readOnly) return false;
+      if (!editorIsReady(editor) || readOnly) return false;
       let chain = editor.chain().focus();
       if (type === "quote") chain = editor.isActive("blockquote") ? chain.unsetBlockquote() : chain.setBlockquote();
       else if (type === "code-block") chain = editor.isActive("codeBlock") ? chain.setParagraph() : chain.setCodeBlock();
@@ -504,18 +511,18 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       return chain.run();
     },
     applyLineHeight(value = "") {
-      if (!editor || readOnly || editor.isActive("codeBlock")) return false;
+      if (!editorIsReady(editor) || readOnly || editor.isActive("codeBlock")) return false;
       const chain = editor.chain().focus();
       return value
         ? chain.setParagraphLineHeight(value).run()
         : chain.unsetParagraphLineHeight().run();
     },
     clearFormatting() {
-      if (!editor || readOnly || editor.state.selection.empty) return false;
+      if (!editorIsReady(editor) || readOnly || editor.state.selection.empty) return false;
       return editor.chain().focus().unsetAllMarks().removeEmptyTextStyle().unsetParagraphLineHeight().run();
     },
     insertLink(url, label = "") {
-      if (!editor || readOnly) return false;
+      if (!editorIsReady(editor) || readOnly) return false;
       const href = normalizeLinkUrl(url);
       if (!href) return false;
       if (editor.state.selection.empty) {
@@ -532,7 +539,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       return openNewMath();
     },
     startFormatPainter() {
-      if (!editor || readOnly) return false;
+      if (!editorIsReady(editor) || readOnly) return false;
       painterSnapshotRef.current = snapshotForPainter(editor);
       painterActiveRef.current = true;
       emitSelection(editor);
@@ -544,7 +551,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       return cancelPainter();
     },
     focus() {
-      editor?.commands.focus();
+      if (editorIsReady(editor)) editor.commands.focus();
     },
   }), [editor, readOnly]);
 
