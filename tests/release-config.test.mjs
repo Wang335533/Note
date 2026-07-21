@@ -15,6 +15,7 @@ test("release configuration avoids the self-extracting portable target", () => {
   assert.equal(packageJson.build?.portable, undefined);
   assert.equal(packageJson.build?.nsis?.differentialPackage, false);
   assert.doesNotMatch(packageJson.scripts?.["package:win"] || "", /portable/i);
+  assert.match(packageJson.scripts?.["package:installer"] || "", /--publish never/);
 });
 
 test("release contains only the locales the Chinese interface can use", () => {
