@@ -3,8 +3,8 @@ const WINDOW_METRICS = Object.freeze({
   defaultHeight: 854,
   minWidth: 420,
   minHeight: 660,
-  maxWidth: 760,
-  maxHeight: 1050,
+  maxWidth: null,
+  maxHeight: null,
   edgeGap: 28,
   topGap: 18,
 });
@@ -45,8 +45,8 @@ function fitWindowBounds(savedBounds, workArea, metrics = WINDOW_METRICS) {
     width: Math.max(1, Math.trunc(workArea.width)),
     height: Math.max(1, Math.trunc(workArea.height)),
   };
-  const effectiveMaxWidth = Math.max(1, Math.min(metrics.maxWidth, area.width));
-  const effectiveMaxHeight = Math.max(1, Math.min(metrics.maxHeight, area.height));
+  const effectiveMaxWidth = Math.max(1, Math.min(Number.isFinite(metrics.maxWidth) ? metrics.maxWidth : area.width, area.width));
+  const effectiveMaxHeight = Math.max(1, Math.min(Number.isFinite(metrics.maxHeight) ? metrics.maxHeight : area.height, area.height));
   const effectiveMinWidth = Math.min(metrics.minWidth, effectiveMaxWidth);
   const effectiveMinHeight = Math.min(metrics.minHeight, effectiveMaxHeight);
   const requested = requestedWindowRectangle(savedBounds, metrics);

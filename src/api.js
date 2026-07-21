@@ -292,7 +292,7 @@ export function createBrowserApi(browserWindow, {
     });
   }
 
-  async function importMarkdown(notebookId = null) {
+  async function importMarkdown(notebookId = null, folderId = null) {
     try {
       const files = await chooseMarkdownFiles();
       if (files === null) return { ok: false, error: "当前预览环境无法导入" };
@@ -304,6 +304,7 @@ export function createBrowserApi(browserWindow, {
         next = applyBrowserOperation(next, {
           type: "note:add",
           notebookId,
+          folderId,
           title: deriveImportedTitle(file.name, body),
           body,
         }, { now: now(), randomUUID });
@@ -378,6 +379,7 @@ export function createBrowserApi(browserWindow, {
     setWindowMode: (mode) => mutate({ type: "settings:set", key: "windowMode", value: mode }),
     setLocked: (locked) => mutate({ type: "settings:set", key: "locked", value: locked }),
     setLaunchAtLogin: (enabled) => mutate({ type: "settings:set", key: "launchAtLogin", value: enabled }),
+    toggleMaximize: async () => ({ ok: false, error: "浏览器预览不支持窗口最大化" }),
     quitReady: async () => ({ ok: true }),
     onState: (listener) => { stateListeners.add(listener); return () => stateListeners.delete(listener); },
     onSaveStatus: (listener) => { saveListeners.add(listener); return () => saveListeners.delete(listener); },

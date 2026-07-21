@@ -56,6 +56,7 @@ function snapshotForPainter(editor) {
     code: state.code,
     fontFamily: textStyle.fontFamily || "",
     fontSize: textStyle.fontSize || "",
+    lineHeight: state.lineHeight || "",
     block: state.block,
   };
 }
@@ -280,6 +281,9 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
     if (snapshot.fontFamily) chain = chain.setFontFamily(snapshot.fontFamily);
     if (snapshot.fontSize) chain = chain.setFontSize(snapshot.fontSize);
     chain = applyBlockToChain(chain, snapshot.block);
+    chain = snapshot.lineHeight
+      ? chain.setParagraphLineHeight(snapshot.lineHeight)
+      : chain.unsetParagraphLineHeight();
     const applied = chain.run();
     callbacksRef.current.showToast?.("格式已应用");
     emitSelection(editor);
@@ -499,9 +503,16 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       else chain = applyBlockToChain(chain, type);
       return chain.run();
     },
+    applyLineHeight(value = "") {
+      if (!editor || readOnly || editor.isActive("codeBlock")) return false;
+      const chain = editor.chain().focus();
+      return value
+        ? chain.setParagraphLineHeight(value).run()
+        : chain.unsetParagraphLineHeight().run();
+    },
     clearFormatting() {
       if (!editor || readOnly || editor.state.selection.empty) return false;
-      return editor.chain().focus().unsetAllMarks().removeEmptyTextStyle().run();
+      return editor.chain().focus().unsetAllMarks().removeEmptyTextStyle().unsetParagraphLineHeight().run();
     },
     insertLink(url, label = "") {
       if (!editor || readOnly) return false;

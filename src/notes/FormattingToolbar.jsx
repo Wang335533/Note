@@ -16,7 +16,7 @@ import {
   TextUnderline,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { BLOCK_OPTIONS, FONT_OPTIONS, SIZE_OPTIONS } from "./rich-text.js";
+import { BLOCK_OPTIONS, FONT_OPTIONS, LINE_HEIGHT_OPTIONS, SIZE_OPTIONS } from "./rich-text.js";
 
 function FormatButton({ label, active = false, disabled = false, onClick, children }) {
   return (
@@ -179,6 +179,16 @@ export function FormattingToolbar({
             <span>字号</span>
             <select value={formatState.size || ""} onChange={(event) => applyInline("size", event.target.value)}>
               {SIZE_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label className="more-format-field">
+            <span>行距</span>
+            <select
+              value={formatState.lineHeight || ""}
+              disabled={formatState.block === "code-block"}
+              onChange={(event) => editorRef.current?.applyLineHeight?.(event.target.value)}
+            >
+              {LINE_HEIGHT_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <div className="more-format-grid">

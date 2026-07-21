@@ -54,11 +54,24 @@ test("library export preserves notebook structure, unique note names, and relati
     title: "识别策略",
     body: "第二篇",
   }, now, { randomUUID: () => "note-two" });
+  state = applyOperation(state, {
+    type: "folder:add",
+    notebookId: "notebook-research",
+    name: "机制/检验",
+  }, now, { randomUUID: () => "folder-mechanism" });
+  state = applyOperation(state, {
+    type: "note:add",
+    notebookId: "notebook-research",
+    folderId: "folder-mechanism",
+    title: "中介路径",
+    body: "文件夹内笔记",
+  }, now, { randomUUID: () => "note-three" });
 
   const plan = createLibraryExportPlan(state);
   assert.deepEqual(plan.notes.map((note) => note.relativePath), [
     "研究 项目/识别策略.md",
     "研究 项目/识别策略--note-two.md",
+    "研究 项目/机制 检验/中介路径.md",
   ]);
   assert.equal(plan.notes[0].content, "![图](识别策略.assets/image-one.png)");
   assert.equal(plan.notes[0].assets[0].relativePath, "研究 项目/识别策略.assets/image-one.png");

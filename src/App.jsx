@@ -2,6 +2,8 @@ import {
   Asterisk,
   AppWindow,
   ArrowDown,
+  ArrowsInSimple,
+  ArrowsOutSimple,
   CaretDown,
   CaretRight,
   Check,
@@ -954,7 +956,14 @@ export function App() {
   const createBlankNote = useCallback(async () => {
     const viewId = state?.settings?.notesLastNotebookId;
     const notebook = viewId ? state?.notebooks?.[viewId] : null;
-    return mutate({ type: "note:add", notebookId: notebook && !notebook.trashedAt ? notebook.id : null });
+    const folder = state?.settings?.notesLastFolderId
+      ? state?.folders?.[state.settings.notesLastFolderId]
+      : null;
+    return mutate({
+      type: "note:add",
+      notebookId: notebook && !notebook.trashedAt ? notebook.id : null,
+      folderId: folder && !folder.trashedAt && folder.notebookId === notebook?.id ? folder.id : null,
+    });
   }, [mutate, state]);
 
   if (!state) {
@@ -988,7 +997,7 @@ export function App() {
 
   return (
     <main
-      className={`preview-shell ${isDesktop ? "desktop-runtime" : ""} ${state.settings.reducedMotion ? "reduce-motion" : ""}`}
+      className={`preview-shell ${isDesktop ? "desktop-runtime" : ""} ${state.runtime?.isMaximized ? "is-maximized" : ""} ${state.settings.reducedMotion ? "reduce-motion" : ""}`}
       onClick={(event) => {
         if (!event.target.closest(".task-actions")) setOpenMenu(null);
         if (activeModule === "todo"
@@ -1034,6 +1043,17 @@ export function App() {
             <div className="window-grip" title="拖动窗口">
               <DotsSixVertical size={20} weight="bold" aria-hidden="true" />
             </div>
+            {isDesktop ? (
+              <button
+                type="button"
+                className="icon-button window-maximize-button"
+                aria-label={state.runtime?.isMaximized ? "还原窗口" : "最大化窗口"}
+                title={state.runtime?.isMaximized ? "还原窗口" : "最大化窗口"}
+                onClick={() => void noteApi.toggleMaximize?.()}
+              >
+                {state.runtime?.isMaximized ? <ArrowsInSimple size={17} /> : <ArrowsOutSimple size={17} />}
+              </button>
+            ) : null}
             {activeModule === "todo" ? (
               <button
                 type="button"

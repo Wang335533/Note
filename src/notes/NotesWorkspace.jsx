@@ -3,10 +3,12 @@ import {
   ArrowLeft,
   CaretDown,
   Check,
+  CaretRight,
   DotsThree,
   DownloadSimple,
   FileText,
   FolderOpen,
+  FolderSimple,
   ListChecks,
   Plus,
   PushPin,
@@ -104,7 +106,7 @@ function NoteListItem({ note, selected, notebookName, onOpen, trashed = false })
   );
 }
 
-function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, saveStatus, linkedTaskCount, requestPermanentDelete }) {
+function NoteEditorPane({ note, notebooks, folders, state, mutate, navigate, showToast, saveStatus, linkedTaskCount, requestPermanentDelete }) {
   const [title, setTitle] = useState(note.title);
   const [body, setBody] = useState(note.body);
   const [richBody, setRichBody] = useState(note.richBody);
@@ -118,6 +120,7 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
     code: false,
     font: "",
     size: "",
+    lineHeight: "",
     block: "paragraph",
     canClear: false,
     painterActive: false,
@@ -187,17 +190,20 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
   const isDirty = title.trim() !== savedTitleRef.current || richBodyKey !== savedRichBodyKeyRef.current;
   const trashed = Boolean(note.trashedAt);
 
-  const moveNote = async (notebookId) => {
+  const moveNote = async (destination) => {
     await flush();
-    const target = notebookId || null;
-    const result = await mutate({ type: "note:move", id: note.id, notebookId: target });
-    if (result.ok) await navigate(target || "unfiled", note.id, "editor");
+    const [kind, id] = String(destination || "").split(":");
+    const targetFolder = kind === "folder" ? folders.find((folder) => folder.id === id) : null;
+    const notebookId = targetFolder?.notebookId || (kind === "notebook" ? id : null);
+    const folderId = targetFolder?.id || null;
+    const result = await mutate({ type: "note:move", id: note.id, notebookId, folderId });
+    if (result.ok) await navigate(notebookId || "unfiled", note.id, "editor", folderId);
   };
 
   return (
     <section className={`note-editor-pane ${trashed ? "is-trashed" : ""}`} aria-label="笔记编辑器">
       <header className="note-editor-toolbar">
-        <button type="button" className="icon-button note-back-button" aria-label="返回笔记列表" onClick={() => navigate(state.settings.notesLastNotebookId, note.id, "list")}>
+        <button type="button" className="icon-button note-back-button" aria-label="返回笔记列表" onClick={() => navigate(state.settings.notesLastNotebookId, note.id, "list", state.settings.notesLastFolderId)}>
           <ArrowLeft size={19} />
         </button>
         <button
@@ -218,9 +224,20 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
         ) : (
           <label className="note-location-select">
             <FolderOpen size={15} aria-hidden="true" />
-            <select value={note.notebookId || ""} aria-label="移动到笔记本" onChange={(event) => void moveNote(event.target.value)}>
+            <select
+              value={note.folderId ? `folder:${note.folderId}` : note.notebookId ? `notebook:${note.notebookId}` : ""}
+              aria-label="移动笔记到"
+              onChange={(event) => void moveNote(event.target.value)}
+            >
               <option value="">未分类</option>
-              {notebooks.map((notebook) => <option key={notebook.id} value={notebook.id}>{notebook.name}</option>)}
+              {notebooks.map((notebook) => (
+                <optgroup key={notebook.id} label={notebook.name}>
+                  <option value={`notebook:${notebook.id}`}>{notebook.name}（根目录）</option>
+                  {folders.filter((folder) => folder.notebookId === notebook.id).map((folder) => (
+                    <option key={folder.id} value={`folder:${folder.id}`}>　{folder.name}</option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
             <CaretDown size={12} aria-hidden="true" />
           </label>
@@ -265,6 +282,7 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
           className="note-title-input"
           value={title}
           readOnly={trashed}
+          autoFocus={!trashed && !note.title && !note.body}
           aria-label="笔记标题"
           placeholder="无标题"
           onChange={(event) => {
@@ -326,7 +344,7 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
                 const restored = result.state?.notes?.[note.id];
                 const destination = restored?.notebookId || "unfiled";
                 showToast(restored?.notebookId ? "笔记已恢复" : "笔记已恢复到未分类");
-                await navigate(destination, note.id, "editor");
+                await navigate(destination, note.id, "editor", restored?.folderId || null);
               }
             }}><ArrowCounterClockwise size={15} /> 恢复</button>
             <button type="button" className="danger-text-button" onClick={() => requestPermanentDelete(note)}>永久删除</button>
@@ -356,25 +374,35 @@ function NoteEditorPane({ note, notebooks, state, mutate, navigate, showToast, s
   );
 }
 
-function LibraryDialog({ dialog, close, onConfirm, notebooks }) {
+function LibraryDialog({ dialog, close, onConfirm, notebooks, folders }) {
   const [value, setValue] = useState("");
 
   useEffect(() => {
-    setValue(dialog?.type === "rename" ? dialog.notebook.name : dialog?.type === "import" ? (dialog.destination || "") : "");
+    if (["rename", "renameFolder"].includes(dialog?.type)) {
+      setValue(dialog.notebook?.name || dialog.folder?.name || "");
+    } else if (["import", "moveFolder"].includes(dialog?.type)) {
+      setValue(dialog.destination || "");
+    } else setValue("");
   }, [dialog]);
 
   if (!dialog) return null;
-  const isNameDialog = dialog.type === "create" || dialog.type === "rename";
+  const isNameDialog = ["create", "rename", "createFolder", "renameFolder"].includes(dialog.type);
   const titles = {
     create: "新建笔记本",
     rename: "重命名笔记本",
+    createFolder: "新建文件夹",
+    renameFolder: "重命名文件夹",
+    moveFolder: "移动文件夹",
     trashNotebook: "移到废纸篓？",
+    trashFolder: "移到废纸篓？",
     permanentNotebook: "永久删除笔记本？",
+    permanentFolder: "永久删除文件夹？",
     permanentNote: "永久删除笔记？",
     emptyTrash: "清空废纸篓？",
     import: "导入 Markdown",
   };
-  const danger = ["trashNotebook", "permanentNotebook", "permanentNote", "emptyTrash"].includes(dialog.type);
+  const danger = ["trashNotebook", "trashFolder", "permanentNotebook", "permanentFolder", "permanentNote", "emptyTrash"].includes(dialog.type);
+  const isDestinationDialog = dialog.type === "import" || dialog.type === "moveFolder";
 
   return (
     <div className="sheet-backdrop library-dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && close()}>
@@ -387,15 +415,28 @@ function LibraryDialog({ dialog, close, onConfirm, notebooks }) {
           <button type="button" className="icon-button" aria-label="关闭" onClick={close}><X size={18} /></button>
         </header>
         {isNameDialog ? (
-          <input autoFocus value={value} maxLength={80} placeholder="笔记本名称" onChange={(event) => setValue(event.target.value)} />
-        ) : dialog.type === "import" ? (
+          <input
+            autoFocus
+            value={value}
+            maxLength={80}
+            placeholder={dialog.type.includes("Folder") ? "文件夹名称" : "笔记本名称"}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        ) : isDestinationDialog ? (
           <label className="import-destination">
-            <span>导入到</span>
+            <span>{dialog.type === "import" ? "导入到" : "移动到笔记本"}</span>
             <select autoFocus value={value} onChange={(event) => setValue(event.target.value)}>
-              <option value="">未分类</option>
-              {notebooks.map((notebook) => <option key={notebook.id} value={notebook.id}>{notebook.name}</option>)}
+              {dialog.type === "import" ? <option value="">未分类</option> : null}
+              {notebooks.map((notebook) => (
+                <optgroup key={notebook.id} label={notebook.name}>
+                  <option value={`notebook:${notebook.id}`}>{notebook.name}（根目录）</option>
+                  {dialog.type === "import" ? folders.filter((folder) => folder.notebookId === notebook.id).map((folder) => (
+                    <option key={folder.id} value={`folder:${folder.id}`}>　{folder.name}</option>
+                  )) : null}
+                </optgroup>
+              ))}
             </select>
-            <small>可一次选择多个 .md 文件；桌面版会另行确认是否复制可解析的本地图片。</small>
+            {dialog.type === "import" ? <small>可一次选择多个 .md 文件；桌面版会另行确认是否复制可解析的本地图片。</small> : null}
           </label>
         ) : (
           <p>{dialog.message}</p>
@@ -403,7 +444,7 @@ function LibraryDialog({ dialog, close, onConfirm, notebooks }) {
         <div className="sheet-actions">
           <button type="button" className="secondary-button" onClick={close}>取消</button>
           <button type="submit" className={danger ? "danger-button" : "primary-button"} disabled={isNameDialog && !value.trim()}>
-            {dialog.type === "import" ? "选择文件" : danger ? "确认" : "完成"}
+            {dialog.type === "import" ? "选择文件" : dialog.type === "moveFolder" ? "移动" : danger ? "确认" : "完成"}
           </button>
         </div>
       </form>
@@ -415,8 +456,10 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sortMode, setSortMode] = useState("updated");
   const [notebookMenu, setNotebookMenu] = useState(null);
+  const [folderMenu, setFolderMenu] = useState(null);
   const [dialog, setDialog] = useState(null);
   const viewId = state.settings.notesLastNotebookId;
+  const activeFolderId = state.settings.notesLastFolderId;
   const selectedNoteId = state.settings.notesLastNoteId;
   const notebooks = useMemo(() => Object.values(state.notebooks)
     .filter((notebook) => !notebook.trashedAt)
@@ -424,6 +467,12 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
   const trashedNotebooks = useMemo(() => Object.values(state.notebooks)
     .filter((notebook) => notebook.trashedAt)
     .sort((left, right) => right.trashedAt.localeCompare(left.trashedAt)), [state.notebooks]);
+  const folders = useMemo(() => Object.values(state.folders || {})
+    .filter((folder) => !folder.trashedAt)
+    .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name, "zh-CN")), [state.folders]);
+  const trashedFolders = useMemo(() => Object.values(state.folders || {})
+    .filter((folder) => folder.trashedAt)
+    .sort((left, right) => right.trashedAt.localeCompare(left.trashedAt)), [state.folders]);
 
   const notebookNames = useMemo(() => new Map(Object.values(state.notebooks).map((notebook) => [notebook.id, notebook.name])), [state.notebooks]);
   const activeNotes = useMemo(() => Object.values(state.notes).filter((note) => !note.trashedAt), [state.notes]);
@@ -432,45 +481,73 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
     if (viewId === "trash") return trashedNotes;
     if (viewId === "all") return activeNotes;
     if (viewId === "unfiled") return activeNotes.filter((note) => note.notebookId === null);
-    return activeNotes.filter((note) => note.notebookId === viewId);
-  }, [activeNotes, trashedNotes, viewId]);
+    return activeNotes.filter((note) => note.notebookId === viewId && note.folderId === (activeFolderId || null));
+  }, [activeFolderId, activeNotes, trashedNotes, viewId]);
   const pinned = useMemo(() => sortNotes(notesInView.filter((note) => note.pinnedAt && !note.trashedAt), sortMode), [notesInView, sortMode]);
   const unpinned = useMemo(() => sortNotes(notesInView.filter((note) => !note.pinnedAt), sortMode), [notesInView, sortMode]);
   const selectedNote = selectedNoteId ? state.notes[selectedNoteId] || null : null;
-  const currentLabel = SYSTEM_VIEWS[viewId] || state.notebooks[viewId]?.name || "全部笔记";
+  const currentNotebook = state.notebooks[viewId] || null;
+  const activeFolder = activeFolderId ? state.folders?.[activeFolderId] || null : null;
+  const foldersInView = currentNotebook
+    ? folders.filter((folder) => folder.notebookId === currentNotebook.id)
+    : [];
+  const currentLabel = SYSTEM_VIEWS[viewId] || currentNotebook?.name || "全部笔记";
 
-  const navigate = useCallback((targetViewId, noteId = null, pane = noteId ? "editor" : "list") => mutate({
+  const navigate = useCallback((targetViewId, noteId = null, pane = noteId ? "editor" : "list", folderId = null) => mutate({
     type: "notes:navigate",
     viewId: targetViewId,
+    folderId,
     noteId,
     pane,
   }), [mutate]);
 
   const createNote = async () => {
     const notebook = state.notebooks[viewId];
-    await mutate({ type: "note:add", notebookId: notebook && !notebook.trashedAt ? notebook.id : null });
+    await mutate({
+      type: "note:add",
+      notebookId: notebook && !notebook.trashedAt ? notebook.id : null,
+      folderId: notebook && !notebook.trashedAt ? activeFolderId : null,
+    });
   };
 
-  const openView = async (target) => {
+  const openView = async (target, folderId = null) => {
     setDrawerOpen(false);
     setNotebookMenu(null);
-    await navigate(target, null, "list");
+    setFolderMenu(null);
+    await navigate(target, null, "list", folderId);
   };
 
   const confirmDialog = async (request, value) => {
     let result = { ok: false };
     if (request.type === "create") result = await mutate({ type: "notebook:add", name: value });
     if (request.type === "rename") result = await mutate({ type: "notebook:rename", id: request.notebook.id, name: value });
+    if (request.type === "createFolder") result = await mutate({ type: "folder:add", notebookId: request.notebook.id, name: value });
+    if (request.type === "renameFolder") result = await mutate({ type: "folder:rename", id: request.folder.id, name: value });
+    if (request.type === "moveFolder") {
+      const notebookId = String(value || "").replace(/^notebook:/, "");
+      result = await mutate({ type: "folder:move", id: request.folder.id, notebookId });
+    }
     if (request.type === "trashNotebook") result = await mutate({ type: "notebook:trash", id: request.notebook.id });
+    if (request.type === "trashFolder") result = await mutate({ type: "folder:trash", id: request.folder.id });
     if (request.type === "permanentNotebook") result = await mutate({ type: "notebook:deletePermanent", id: request.notebook.id });
+    if (request.type === "permanentFolder") result = await mutate({ type: "folder:deletePermanent", id: request.folder.id });
     if (request.type === "permanentNote") result = await mutate({ type: "note:deletePermanent", id: request.note.id });
     if (request.type === "emptyTrash") result = await mutate({ type: "trash:empty" });
-    if (request.type === "import") result = await noteApi.importMarkdown(value || null);
+    if (request.type === "import") {
+      const [kind, id] = String(value || "").split(":");
+      const folder = kind === "folder" ? state.folders?.[id] : null;
+      const notebookId = folder?.notebookId || (kind === "notebook" ? id : null);
+      result = await noteApi.importMarkdown(notebookId, folder?.id || null);
+    }
     if (result.ok) {
       setDialog(null);
       if (request.type === "create") showToast("笔记本已创建");
       if (request.type === "rename") showToast("笔记本已重命名");
+      if (request.type === "createFolder") showToast("文件夹已创建");
+      if (request.type === "renameFolder") showToast("文件夹已重命名");
+      if (request.type === "moveFolder") showToast("文件夹已移动");
       if (request.type === "trashNotebook") showToast("笔记本已移到废纸篓", "撤销", () => mutate({ type: "notebook:restore", id: request.notebook.id }));
+      if (request.type === "trashFolder") showToast("文件夹已移到废纸篓", "撤销", () => mutate({ type: "folder:restore", id: request.folder.id }));
       if (request.type === "import") showToast(`已导入 ${result.importedCount || 0} 篇笔记${result.textOnly ? "（预览模式仅文字）" : ""}`);
     } else if (!result.canceled) showToast(result.error || "操作没有完成");
   };
@@ -482,17 +559,34 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
   const groupedTrashNoteIds = new Set(trashedNotebooks.flatMap((notebook) => trashedNotes
     .filter((note) => note.trashedFromNotebookId === notebook.id)
     .map((note) => note.id)));
+  for (const folder of trashedFolders) {
+    for (const note of trashedNotes.filter((item) => item.trashedFromFolderId === folder.id)) groupedTrashNoteIds.add(note.id);
+  }
   const looseTrashNotes = unpinned.filter((note) => !groupedTrashNoteIds.has(note.id));
+  const standaloneTrashedFolders = trashedFolders.filter((folder) => !state.notebooks[folder.trashedFromNotebookId]?.trashedAt);
 
   return (
     <div className={`notes-workspace pane-${state.settings.notesPane} ${state.settings.notesSidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
       <section className="notes-master" aria-label="笔记列表">
         <header className="notes-list-toolbar">
-          <button type="button" className="notebook-trigger" aria-expanded={drawerOpen} onClick={() => setDrawerOpen(true)}>
-            <FolderOpen size={17} />
-            <span>{currentLabel}</span>
-            <CaretDown size={13} />
-          </button>
+          <div className="notes-location-breadcrumb">
+            <button
+              type="button"
+              className="notebook-trigger"
+              aria-expanded={drawerOpen}
+              onClick={() => activeFolder ? void openView(viewId) : setDrawerOpen(true)}
+            >
+              <FolderOpen size={17} />
+              <span>{currentLabel}</span>
+              {activeFolder ? null : <CaretDown size={13} />}
+            </button>
+            {activeFolder ? (
+              <>
+                <CaretRight size={12} aria-hidden="true" />
+                <button type="button" className="folder-crumb" onClick={() => setDrawerOpen(true)}>{activeFolder.name}</button>
+              </>
+            ) : null}
+          </div>
           <span className="notes-count">{notesInView.length}</span>
           <label className="notes-sort">
             <SortAscending size={16} />
@@ -509,10 +603,10 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
             <>
               <div className="trash-list-heading">
                 <span>内容不会自动过期</span>
-                {(trashedNotes.length || trashedNotebooks.length) ? (
+                {(trashedNotes.length || trashedNotebooks.length || trashedFolders.length) ? (
                   <button type="button" onClick={() => setDialog({
                     type: "emptyTrash",
-                    message: `将永久删除 ${trashedNotes.length} 篇笔记和 ${trashedNotebooks.length} 个笔记本，以及受管图片。此操作无法撤销。`,
+                    message: `将永久删除 ${trashedNotes.length} 篇笔记、${trashedFolders.length} 个文件夹和 ${trashedNotebooks.length} 个笔记本，以及受管图片。此操作无法撤销。`,
                   })}>清空</button>
                 ) : null}
               </div>
@@ -544,6 +638,35 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
                   </section>
                 );
               })}
+              {standaloneTrashedFolders.map((folder) => {
+                const contained = sortNotes(trashedNotes.filter((note) => note.trashedFromFolderId === folder.id), sortMode);
+                const origin = state.notebooks[folder.trashedFromNotebookId];
+                return (
+                  <section key={folder.id} className="trashed-notebook-group trashed-folder-group">
+                    <header>
+                      <div><FolderSimple size={16} /><strong>{folder.name}</strong><span>{origin?.name || "原笔记本"} · {contained.length} 篇</span></div>
+                      <div>
+                        <button type="button" aria-label={`恢复文件夹 ${folder.name}`} onClick={() => mutate({ type: "folder:restore", id: folder.id })}><ArrowCounterClockwise size={15} /></button>
+                        <button type="button" aria-label={`永久删除文件夹 ${folder.name}`} onClick={() => setDialog({
+                          type: "permanentFolder",
+                          folder,
+                          message: `将永久删除“${folder.name}”以及其中 ${contained.length} 篇笔记和受管图片。`,
+                        })}><Trash size={15} /></button>
+                      </div>
+                    </header>
+                    {contained.map((note) => (
+                      <div key={note.id} className="trash-note-row">
+                        <NoteListItem note={note} trashed selected={note.id === selectedNoteId} notebookName={folder.name} onOpen={(item) => navigate("trash", item.id, "editor")} />
+                        <button type="button" className="trash-row-delete" aria-label={`永久删除 ${visibleTitle(note)}`} onClick={() => setDialog({
+                          type: "permanentNote",
+                          note,
+                          message: `将永久删除“${visibleTitle(note)}”和其中的受管图片。此操作无法撤销。`,
+                        })}><Trash size={15} /></button>
+                      </div>
+                    ))}
+                  </section>
+                );
+              })}
               {looseTrashNotes.length ? <p className="note-list-section-label">单篇笔记</p> : null}
               {looseTrashNotes.map((note) => (
                 <div key={note.id} className="trash-note-row">
@@ -558,13 +681,48 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
             </>
           ) : (
             <>
+              {currentNotebook && !activeFolder ? (
+                <section className="directory-section" aria-label="文件夹">
+                  <div className="directory-section-heading">
+                    <span>文件夹</span>
+                    <button type="button" aria-label="在当前笔记本新建文件夹" onClick={() => setDialog({ type: "createFolder", notebook: currentNotebook })}><Plus size={15} /></button>
+                  </div>
+                  {foldersInView.map((folder) => {
+                    const count = activeNotes.filter((note) => note.folderId === folder.id).length;
+                    return (
+                      <div key={folder.id} className="folder-list-row">
+                        <button type="button" className="folder-list-open" onClick={() => void openView(currentNotebook.id, folder.id)}>
+                          <FolderSimple size={17} />
+                          <span>{folder.name}</span>
+                          <b>{count}</b>
+                        </button>
+                        <button type="button" className="folder-list-more" aria-label={`管理文件夹 ${folder.name}`} onClick={() => setFolderMenu(folderMenu === folder.id ? null : folder.id)}><DotsThree size={18} weight="bold" /></button>
+                        {folderMenu === folder.id ? (
+                          <div className="folder-list-menu">
+                            <button type="button" onClick={() => { setDialog({ type: "renameFolder", folder }); setFolderMenu(null); }}>重命名</button>
+                            <button type="button" onClick={() => { setDialog({ type: "moveFolder", folder, destination: `notebook:${folder.notebookId}` }); setFolderMenu(null); }}>移动到…</button>
+                            <button type="button" className="danger" onClick={() => {
+                              setDialog({ type: "trashFolder", folder, message: `“${folder.name}”和其中 ${count} 篇笔记将一起移到废纸篓。` });
+                              setFolderMenu(null);
+                            }}>移到废纸篓</button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </section>
+              ) : null}
+              <div className="directory-section-heading note-create-heading">
+                <span>笔记</span>
+                <button type="button" aria-label="在当前位置新建笔记" onClick={() => void createNote()}><Plus size={15} /></button>
+              </div>
               {pinned.length ? <p className="note-list-section-label">置顶</p> : null}
-              {pinned.map((note) => <NoteListItem key={note.id} note={note} selected={note.id === selectedNoteId} notebookName={notebookNames.get(note.notebookId)} onOpen={(item) => navigate(viewId, item.id, "editor")} />)}
+              {pinned.map((note) => <NoteListItem key={note.id} note={note} selected={note.id === selectedNoteId} notebookName={activeFolder?.name || notebookNames.get(note.notebookId)} onOpen={(item) => navigate(viewId, item.id, "editor", activeFolderId)} />)}
               {pinned.length && unpinned.length ? <p className="note-list-section-label">笔记</p> : null}
-              {unpinned.map((note) => <NoteListItem key={note.id} note={note} selected={note.id === selectedNoteId} notebookName={notebookNames.get(note.notebookId)} onOpen={(item) => navigate(viewId, item.id, "editor")} />)}
+              {unpinned.map((note) => <NoteListItem key={note.id} note={note} selected={note.id === selectedNoteId} notebookName={activeFolder?.name || notebookNames.get(note.notebookId)} onOpen={(item) => navigate(viewId, item.id, "editor", activeFolderId)} />)}
             </>
           )}
-          {!notesInView.length && !(viewId === "trash" && trashedNotebooks.length) ? (
+          {!notesInView.length && !(viewId === "trash" && (trashedNotebooks.length || trashedFolders.length)) ? (
             <div className="notes-empty-state">
               <FileText size={27} />
               <strong>{viewId === "trash" ? "废纸篓是空的" : "这里还没有笔记"}</strong>
@@ -581,6 +739,7 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
             key={selectedNote.id}
             note={selectedNote}
             notebooks={notebooks}
+            folders={folders}
             state={state}
             mutate={mutate}
             navigate={navigate}
@@ -648,10 +807,15 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
               {!notebooks.length ? <p>还没有笔记本</p> : null}
             </div>
             <nav className="drawer-trash-link">
-              <button type="button" className={viewId === "trash" ? "is-active" : ""} onClick={() => void openView("trash")}><Trash size={17} /><span>废纸篓</span><b>{trashedNotes.length + trashedNotebooks.length}</b></button>
+              <button type="button" className={viewId === "trash" ? "is-active" : ""} onClick={() => void openView("trash")}><Trash size={17} /><span>废纸篓</span><b>{trashedNotes.length + trashedFolders.length + trashedNotebooks.length}</b></button>
             </nav>
             <footer>
-              <button type="button" onClick={() => setDialog({ type: "import", destination: state.notebooks[viewId] ? viewId : "" })}><UploadSimple size={16} /> 导入 Markdown</button>
+              <button type="button" onClick={() => setDialog({
+                type: "import",
+                destination: activeFolderId
+                  ? `folder:${activeFolderId}`
+                  : state.notebooks[viewId] ? `notebook:${viewId}` : "",
+              })}><UploadSimple size={16} /> 导入 Markdown</button>
               <button type="button" onClick={async () => {
                 const result = await noteApi.exportLibrary();
                 if (result.ok) showToast(`已导出 ${result.noteCount} 篇笔记`);
@@ -662,7 +826,7 @@ export function NotesWorkspace({ state, mutate, showToast, saveStatus }) {
         </div>
       ) : null}
 
-      <LibraryDialog dialog={dialog} close={() => setDialog(null)} onConfirm={confirmDialog} notebooks={notebooks} />
+      <LibraryDialog dialog={dialog} close={() => setDialog(null)} onConfirm={confirmDialog} notebooks={notebooks} folders={folders} />
     </div>
   );
 }

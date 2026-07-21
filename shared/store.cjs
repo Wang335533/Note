@@ -7,9 +7,10 @@ const {
   stripOwnFormatMarkers,
 } = require("./rich-text.cjs");
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const LEGACY_SCHEMA_VERSION = 1;
 const MARKDOWN_NOTES_SCHEMA_VERSION = 2;
+const RICH_TEXT_NOTES_SCHEMA_VERSION = 3;
 const TIME_VALUE_PATTERN = /^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/;
 const NOTE_SYSTEM_VIEWS = Object.freeze(["all", "unfiled", "trash"]);
 const NOTE_IMAGE_MIME_TYPES = Object.freeze(["image/png", "image/jpeg", "image/webp"]);
@@ -22,8 +23,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   reducedMotion: false,
   reducedTransparency: false,
   windowBounds: null,
+  windowMaximized: false,
   activeModule: "todo",
   notesLastNotebookId: "all",
+  notesLastFolderId: null,
   notesLastNoteId: null,
   notesPane: "list",
   notesSidebarCollapsed: false,
@@ -54,6 +57,7 @@ function createInitialState(now = new Date()) {
     days: { [activeDay]: createDay(activeDay) },
     pendingRollover: null,
     notebooks: {},
+    folders: {},
     notes: {},
     settings,
   };
@@ -149,6 +153,23 @@ function isPersistedNotebookShape(notebook, id) {
     && isNullableString(notebook.trashedAt);
 }
 
+function isPersistedFolderShape(folder, id) {
+  return Boolean(folder)
+    && typeof folder === "object"
+    && !Array.isArray(folder)
+    && folder.id === id
+    && typeof folder.name === "string"
+    && Boolean(folder.name.trim())
+    && isNullableString(folder.notebookId)
+    && isNullableString(folder.parentFolderId)
+    && folder.parentFolderId === null
+    && Number.isFinite(folder.order)
+    && typeof folder.createdAt === "string"
+    && typeof folder.updatedAt === "string"
+    && isNullableString(folder.trashedAt)
+    && isNullableString(folder.trashedFromNotebookId);
+}
+
 function isPersistedAttachmentShape(attachment) {
   return Boolean(attachment)
     && typeof attachment === "object"
@@ -180,12 +201,14 @@ function isPersistedNoteShape(note, id, schemaVersion = SCHEMA_VERSION) {
     && note.attachments.every(isPersistedAttachmentShape);
   if (!common) return false;
   if (schemaVersion === MARKDOWN_NOTES_SCHEMA_VERSION) return note.richBody === undefined;
+  if (schemaVersion >= SCHEMA_VERSION
+    && (!isNullableString(note.folderId) || !isNullableString(note.trashedFromFolderId))) return false;
   return note.richBody === null || isRichBody(note.richBody);
 }
 
 function isPersistedStateShape(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
-  if (![LEGACY_SCHEMA_VERSION, MARKDOWN_NOTES_SCHEMA_VERSION, SCHEMA_VERSION].includes(raw.schemaVersion)) return false;
+  if (![LEGACY_SCHEMA_VERSION, MARKDOWN_NOTES_SCHEMA_VERSION, RICH_TEXT_NOTES_SCHEMA_VERSION, SCHEMA_VERSION].includes(raw.schemaVersion)) return false;
   if (!Number.isInteger(raw.revision) || raw.revision < 0) return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw.activeDay || "")) return false;
   if (!raw.days || typeof raw.days !== "object" || Array.isArray(raw.days)) return false;
@@ -194,6 +217,7 @@ function isPersistedStateShape(raw) {
   if (raw.settings.windowBounds !== undefined
     && raw.settings.windowBounds !== null
     && !normalizeWindowBounds(raw.settings.windowBounds)) return false;
+  if (raw.settings.windowMaximized !== undefined && typeof raw.settings.windowMaximized !== "boolean") return false;
 
   for (const [key, day] of Object.entries(raw.days)) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !day || !Array.isArray(day.tasks)) return false;
@@ -205,6 +229,10 @@ function isPersistedStateShape(raw) {
   if (!raw.notes || typeof raw.notes !== "object" || Array.isArray(raw.notes)) return false;
   if (!Object.entries(raw.notebooks).every(([id, notebook]) => isPersistedNotebookShape(notebook, id))) return false;
   if (!Object.entries(raw.notes).every(([id, note]) => isPersistedNoteShape(note, id, raw.schemaVersion))) return false;
+  if (raw.schemaVersion >= SCHEMA_VERSION) {
+    if (!raw.folders || typeof raw.folders !== "object" || Array.isArray(raw.folders)) return false;
+    if (!Object.entries(raw.folders).every(([id, folder]) => isPersistedFolderShape(folder, id))) return false;
+  }
   return true;
 }
 
@@ -237,6 +265,25 @@ function normalizeNotebook(value, fallbackOrder = 0, now = new Date(), randomUUI
   };
 }
 
+function normalizeFolder(value, fallbackOrder = 0, now = new Date(), randomUUID = defaultRandomUUID) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const name = String(value.name || "").trim();
+  if (!name) return null;
+  return {
+    id: typeof value.id === "string" && value.id ? value.id : randomUUID(),
+    name,
+    notebookId: typeof value.notebookId === "string" && value.notebookId ? value.notebookId : null,
+    parentFolderId: null,
+    order: Number.isFinite(value.order) ? value.order : fallbackOrder,
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : now.toISOString(),
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now.toISOString(),
+    trashedAt: typeof value.trashedAt === "string" ? value.trashedAt : null,
+    trashedFromNotebookId: typeof value.trashedFromNotebookId === "string" && value.trashedFromNotebookId
+      ? value.trashedFromNotebookId
+      : null,
+  };
+}
+
 function normalizeNote(value, now = new Date(), randomUUID = defaultRandomUUID) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return {
@@ -245,12 +292,16 @@ function normalizeNote(value, now = new Date(), randomUUID = defaultRandomUUID) 
     body: typeof value.body === "string" ? value.body : "",
     richBody: normalizeRichBody(value.richBody),
     notebookId: typeof value.notebookId === "string" && value.notebookId ? value.notebookId : null,
+    folderId: typeof value.folderId === "string" && value.folderId ? value.folderId : null,
     pinnedAt: typeof value.pinnedAt === "string" ? value.pinnedAt : null,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : now.toISOString(),
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now.toISOString(),
     trashedAt: typeof value.trashedAt === "string" ? value.trashedAt : null,
     trashedFromNotebookId: typeof value.trashedFromNotebookId === "string" && value.trashedFromNotebookId
       ? value.trashedFromNotebookId
+      : null,
+    trashedFromFolderId: typeof value.trashedFromFolderId === "string" && value.trashedFromFolderId
+      ? value.trashedFromFolderId
       : null,
     attachments: Array.isArray(value.attachments)
       ? value.attachments.map((item) => normalizeAttachment(item, now, randomUUID)).filter(Boolean)
@@ -270,6 +321,7 @@ function normalizeState(raw, now = new Date(), { randomUUID = defaultRandomUUID 
     notesSidebarCollapsed: Boolean(rawSettings.notesSidebarCollapsed),
     notesToolbarCollapsed: Boolean(rawSettings.notesToolbarCollapsed),
     windowBounds: normalizeWindowBounds(rawSettings.windowBounds),
+    windowMaximized: Boolean(rawSettings.windowMaximized),
   };
   settings.dayBoundaryHour = [0, 2, 4, 6].includes(Number(rawSettings.dayBoundaryHour))
     ? Number(rawSettings.dayBoundaryHour)
@@ -282,6 +334,9 @@ function normalizeState(raw, now = new Date(), { randomUUID = defaultRandomUUID 
   settings.notesLastNotebookId = typeof rawSettings.notesLastNotebookId === "string"
     ? rawSettings.notesLastNotebookId
     : "all";
+  settings.notesLastFolderId = typeof rawSettings.notesLastFolderId === "string"
+    ? rawSettings.notesLastFolderId
+    : null;
   settings.notesLastNoteId = typeof rawSettings.notesLastNoteId === "string"
     ? rawSettings.notesLastNoteId
     : null;
@@ -300,6 +355,26 @@ function normalizeState(raw, now = new Date(), { randomUUID = defaultRandomUUID 
     .sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt))
     .forEach((notebook, index) => { notebook.order = index; });
 
+  const folders = {};
+  if (raw.folders && typeof raw.folders === "object" && !Array.isArray(raw.folders)) {
+    for (const [key, value] of Object.entries(raw.folders)) {
+      const folder = normalizeFolder({ ...value, id: value?.id || key }, Object.keys(folders).length, now, randomUUID);
+      if (!folder || folders[folder.id]) continue;
+      if (folder.trashedAt) {
+        folder.notebookId = null;
+      } else if (!folder.notebookId || !notebooks[folder.notebookId] || notebooks[folder.notebookId].trashedAt) {
+        continue;
+      }
+      folders[folder.id] = folder;
+    }
+  }
+  for (const notebook of Object.values(notebooks)) {
+    Object.values(folders)
+      .filter((folder) => !folder.trashedAt && folder.notebookId === notebook.id)
+      .sort((left, right) => left.order - right.order || left.createdAt.localeCompare(right.createdAt))
+      .forEach((folder, index) => { folder.order = index; });
+  }
+
   const notes = {};
   if (raw.notes && typeof raw.notes === "object" && !Array.isArray(raw.notes)) {
     for (const [key, value] of Object.entries(raw.notes)) {
@@ -307,8 +382,13 @@ function normalizeState(raw, now = new Date(), { randomUUID = defaultRandomUUID 
       if (!note || notes[note.id]) continue;
       if (note.trashedAt) {
         note.notebookId = null;
+        note.folderId = null;
       } else if (note.notebookId && (!notebooks[note.notebookId] || notebooks[note.notebookId].trashedAt)) {
         note.notebookId = null;
+        note.folderId = null;
+      } else if (note.folderId) {
+        const folder = folders[note.folderId];
+        if (!folder || folder.trashedAt || folder.notebookId !== note.notebookId) note.folderId = null;
       }
       notes[note.id] = note;
     }
@@ -336,14 +416,26 @@ function normalizeState(raw, now = new Date(), { randomUUID = defaultRandomUUID 
   if (!NOTE_SYSTEM_VIEWS.includes(settings.notesLastNotebookId)
     && (!notebooks[settings.notesLastNotebookId]
       || notebooks[settings.notesLastNotebookId].trashedAt)) settings.notesLastNotebookId = "all";
+  if (settings.notesLastFolderId) {
+    const folder = folders[settings.notesLastFolderId];
+    if (!folder || folder.trashedAt || folder.notebookId !== settings.notesLastNotebookId) settings.notesLastFolderId = null;
+  }
   if (settings.notesLastNoteId && !notes[settings.notesLastNoteId]) settings.notesLastNoteId = null;
   if (settings.notesLastNoteId) {
     const selectedNote = notes[settings.notesLastNoteId];
-    if (selectedNote.trashedAt) settings.notesLastNotebookId = "trash";
+    if (selectedNote.trashedAt) {
+      settings.notesLastNotebookId = "trash";
+      settings.notesLastFolderId = null;
+    }
     else if (settings.notesLastNotebookId === "trash"
       || (settings.notesLastNotebookId === "unfiled" && selectedNote.notebookId !== null)
       || (!NOTE_SYSTEM_VIEWS.includes(settings.notesLastNotebookId)
-        && selectedNote.notebookId !== settings.notesLastNotebookId)) settings.notesLastNotebookId = "all";
+        && selectedNote.notebookId !== settings.notesLastNotebookId)) {
+      settings.notesLastNotebookId = "all";
+      settings.notesLastFolderId = null;
+    } else if (!NOTE_SYSTEM_VIEWS.includes(settings.notesLastNotebookId)) {
+      settings.notesLastFolderId = selectedNote.folderId || null;
+    }
   }
   if (!settings.notesLastNoteId) settings.notesPane = "list";
   return {
@@ -353,6 +445,7 @@ function normalizeState(raw, now = new Date(), { randomUUID = defaultRandomUUID 
     days,
     pendingRollover: normalizeRollover(raw.pendingRollover),
     notebooks,
+    folders,
     notes,
     settings,
   };
@@ -434,6 +527,10 @@ function getNotebook(state, id) {
   return typeof id === "string" ? state.notebooks[id] || null : null;
 }
 
+function getFolder(state, id) {
+  return typeof id === "string" ? state.folders[id] || null : null;
+}
+
 function getNote(state, id) {
   return typeof id === "string" ? state.notes[id] || null : null;
 }
@@ -442,6 +539,12 @@ function requireNotebook(state, id, { trashed = false } = {}) {
   const notebook = getNotebook(state, id);
   if (!notebook || Boolean(notebook.trashedAt) !== trashed) throw new Error("未找到笔记本");
   return notebook;
+}
+
+function requireFolder(state, id, { trashed = false } = {}) {
+  const folder = getFolder(state, id);
+  if (!folder || Boolean(folder.trashedAt) !== trashed) throw new Error("未找到文件夹");
+  return folder;
 }
 
 function requireNote(state, id, { trashed = false } = {}) {
@@ -455,6 +558,16 @@ function validateTargetNotebook(state, id) {
   return requireNotebook(state, id).id;
 }
 
+function validateNoteLocation(state, notebookId, folderId) {
+  const requestedNotebookId = validateTargetNotebook(state, notebookId);
+  if (folderId === null || folderId === undefined || folderId === "") {
+    return { notebookId: requestedNotebookId, folderId: null };
+  }
+  const folder = requireFolder(state, folderId);
+  if (requestedNotebookId && folder.notebookId !== requestedNotebookId) throw new Error("文件夹不属于目标笔记本");
+  return { notebookId: folder.notebookId, folderId: folder.id };
+}
+
 function notebookNameExists(state, name, exceptId = null) {
   const folded = name.toLocaleLowerCase();
   return Object.values(state.notebooks).some(
@@ -464,11 +577,28 @@ function notebookNameExists(state, name, exceptId = null) {
   );
 }
 
+function folderNameExists(state, notebookId, name, exceptId = null) {
+  const folded = name.toLocaleLowerCase();
+  return Object.values(state.folders).some(
+    (folder) => !folder.trashedAt
+      && folder.notebookId === notebookId
+      && folder.id !== exceptId
+      && folder.name.toLocaleLowerCase() === folded,
+  );
+}
+
 function normalizeNotebookOrders(state) {
   Object.values(state.notebooks)
     .filter((notebook) => !notebook.trashedAt)
     .sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt))
     .forEach((notebook, index) => { notebook.order = index; });
+}
+
+function normalizeFolderOrders(state, notebookId) {
+  Object.values(state.folders)
+    .filter((folder) => !folder.trashedAt && folder.notebookId === notebookId)
+    .sort((left, right) => left.order - right.order || left.createdAt.localeCompare(right.createdAt))
+    .forEach((folder, index) => { folder.order = index; });
 }
 
 function clearTaskNoteLinks(state, noteIds) {
@@ -489,6 +619,14 @@ function resetMissingNoteNavigation(state) {
   if (!NOTE_SYSTEM_VIEWS.includes(notebookId)
     && (!state.notebooks[notebookId] || state.notebooks[notebookId].trashedAt)) {
     state.settings.notesLastNotebookId = "all";
+    state.settings.notesLastFolderId = null;
+  }
+  const folderId = state.settings.notesLastFolderId;
+  if (folderId) {
+    const folder = state.folders[folderId];
+    if (!folder || folder.trashedAt || folder.notebookId !== state.settings.notesLastNotebookId) {
+      state.settings.notesLastFolderId = null;
+    }
   }
 }
 
@@ -684,6 +822,16 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
         ? next.settings.notesLastNotebookId
         : operation.viewId;
       if (!NOTE_SYSTEM_VIEWS.includes(viewId)) requireNotebook(next, viewId);
+      const hasFolderId = Object.prototype.hasOwnProperty.call(operation, "folderId");
+      const folderId = NOTE_SYSTEM_VIEWS.includes(viewId)
+        ? null
+        : hasFolderId
+          ? (operation.folderId === null ? null : String(operation.folderId || ""))
+          : viewId === next.settings.notesLastNotebookId ? next.settings.notesLastFolderId : null;
+      if (folderId) {
+        const folder = requireFolder(next, folderId);
+        if (folder.notebookId !== viewId) throw new Error("文件夹不属于当前笔记本");
+      }
       const hasNoteId = Object.prototype.hasOwnProperty.call(operation, "noteId");
       const noteId = hasNoteId
         ? (operation.noteId === null ? null : String(operation.noteId || ""))
@@ -696,7 +844,7 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
           : !note.trashedAt && (
             viewId === "all"
             || (viewId === "unfiled" && note.notebookId === null)
-            || note.notebookId === viewId
+            || (note.notebookId === viewId && (folderId ? note.folderId === folderId : note.folderId === null))
           );
         if (!matchesView) throw new Error("笔记不在当前视图中");
       }
@@ -707,16 +855,19 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
       const beforeNavigation = JSON.stringify({
         activeModule: next.settings.activeModule,
         viewId: next.settings.notesLastNotebookId,
+        folderId: next.settings.notesLastFolderId,
         noteId: next.settings.notesLastNoteId,
         pane: next.settings.notesPane,
       });
       next.settings.activeModule = "notes";
       next.settings.notesLastNotebookId = viewId;
+      next.settings.notesLastFolderId = folderId;
       next.settings.notesLastNoteId = noteId;
       next.settings.notesPane = pane;
       changed = beforeNavigation !== JSON.stringify({
         activeModule: next.settings.activeModule,
         viewId: next.settings.notesLastNotebookId,
+        folderId: next.settings.notesLastFolderId,
         noteId: next.settings.notesLastNoteId,
         pane: next.settings.notesPane,
       });
@@ -736,6 +887,7 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
         trashedAt: null,
       };
       next.settings.notesLastNotebookId = id;
+      next.settings.notesLastFolderId = null;
       break;
     }
     case "notebook:rename": {
@@ -766,15 +918,28 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
       const notebook = requireNotebook(next, operation.id);
       notebook.trashedAt = timestamp;
       notebook.updatedAt = timestamp;
+      for (const folder of Object.values(next.folders)) {
+        if (!folder.trashedAt && folder.notebookId === notebook.id) {
+          folder.trashedAt = timestamp;
+          folder.trashedFromNotebookId = notebook.id;
+          folder.notebookId = null;
+          folder.updatedAt = timestamp;
+        }
+      }
       for (const note of Object.values(next.notes)) {
         if (!note.trashedAt && note.notebookId === notebook.id) {
           note.trashedAt = timestamp;
           note.trashedFromNotebookId = notebook.id;
+          note.trashedFromFolderId = note.folderId;
           note.notebookId = null;
+          note.folderId = null;
         }
       }
       normalizeNotebookOrders(next);
-      if (next.settings.notesLastNotebookId === notebook.id) next.settings.notesLastNotebookId = "all";
+      if (next.settings.notesLastNotebookId === notebook.id) {
+        next.settings.notesLastNotebookId = "all";
+        next.settings.notesLastFolderId = null;
+      }
       if (next.settings.notesLastNoteId && next.notes[next.settings.notesLastNoteId]?.trashedAt) {
         next.settings.notesLastNoteId = null;
         next.settings.notesPane = "list";
@@ -786,11 +951,23 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
       notebook.trashedAt = null;
       notebook.updatedAt = timestamp;
       notebook.order = Object.values(next.notebooks).filter((item) => !item.trashedAt && item.id !== notebook.id).length;
+      for (const folder of Object.values(next.folders)) {
+        if (folder.trashedAt && folder.trashedFromNotebookId === notebook.id) {
+          folder.trashedAt = null;
+          folder.trashedFromNotebookId = null;
+          folder.notebookId = notebook.id;
+          folder.updatedAt = timestamp;
+        }
+      }
+      normalizeFolderOrders(next, notebook.id);
       for (const note of Object.values(next.notes)) {
         if (note.trashedAt && note.trashedFromNotebookId === notebook.id) {
           note.trashedAt = null;
           note.trashedFromNotebookId = null;
           note.notebookId = notebook.id;
+          const folder = getFolder(next, note.trashedFromFolderId);
+          note.folderId = folder && !folder.trashedAt && folder.notebookId === notebook.id ? folder.id : null;
+          note.trashedFromFolderId = null;
         }
       }
       normalizeNotebookOrders(next);
@@ -805,13 +982,136 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
           delete next.notes[note.id];
         }
       }
+      for (const folder of Object.values(next.folders)) {
+        if (folder.trashedAt && folder.trashedFromNotebookId === notebook.id) delete next.folders[folder.id];
+      }
       delete next.notebooks[notebook.id];
       clearTaskNoteLinks(next, removedNoteIds);
       resetMissingNoteNavigation(next);
       break;
     }
-    case "note:add": {
+    case "folder:add": {
       const notebookId = validateTargetNotebook(next, operation.notebookId);
+      if (!notebookId) throw new Error("请选择笔记本");
+      if (operation.parentFolderId !== undefined && operation.parentFolderId !== null) throw new Error("目前仅支持一级文件夹");
+      const name = String(operation.name || "").trim();
+      if (!name) throw new Error("文件夹名称不能为空");
+      if (folderNameExists(next, notebookId, name)) throw new Error("当前笔记本中已存在同名文件夹");
+      const id = randomUUID();
+      next.folders[id] = {
+        id,
+        name,
+        notebookId,
+        parentFolderId: null,
+        order: Object.values(next.folders).filter((folder) => !folder.trashedAt && folder.notebookId === notebookId).length,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        trashedAt: null,
+        trashedFromNotebookId: null,
+      };
+      next.settings.activeModule = "notes";
+      next.settings.notesLastNotebookId = notebookId;
+      next.settings.notesLastFolderId = id;
+      next.settings.notesLastNoteId = null;
+      next.settings.notesPane = "list";
+      break;
+    }
+    case "folder:rename": {
+      const folder = requireFolder(next, operation.id);
+      const name = String(operation.name || "").trim();
+      if (!name) throw new Error("文件夹名称不能为空");
+      if (folderNameExists(next, folder.notebookId, name, folder.id)) throw new Error("当前笔记本中已存在同名文件夹");
+      if (folder.name === name) changed = false;
+      else {
+        folder.name = name;
+        folder.updatedAt = timestamp;
+      }
+      break;
+    }
+    case "folder:move": {
+      const folder = requireFolder(next, operation.id);
+      const notebookId = validateTargetNotebook(next, operation.notebookId);
+      if (!notebookId) throw new Error("请选择笔记本");
+      if (folderNameExists(next, notebookId, folder.name, folder.id)) throw new Error("目标笔记本中已存在同名文件夹");
+      if (folder.notebookId === notebookId) changed = false;
+      else {
+        const previousNotebookId = folder.notebookId;
+        folder.notebookId = notebookId;
+        folder.order = Object.values(next.folders).filter((item) => !item.trashedAt && item.notebookId === notebookId && item.id !== folder.id).length;
+        folder.updatedAt = timestamp;
+        for (const note of Object.values(next.notes)) {
+          if (!note.trashedAt && note.folderId === folder.id) {
+            note.notebookId = notebookId;
+            note.updatedAt = timestamp;
+          }
+        }
+        normalizeFolderOrders(next, previousNotebookId);
+        normalizeFolderOrders(next, notebookId);
+        if (next.settings.notesLastFolderId === folder.id) next.settings.notesLastNotebookId = notebookId;
+      }
+      break;
+    }
+    case "folder:trash": {
+      const folder = requireFolder(next, operation.id);
+      const notebookId = folder.notebookId;
+      folder.trashedAt = timestamp;
+      folder.trashedFromNotebookId = notebookId;
+      folder.notebookId = null;
+      folder.updatedAt = timestamp;
+      for (const note of Object.values(next.notes)) {
+        if (!note.trashedAt && note.folderId === folder.id) {
+          note.trashedAt = timestamp;
+          note.trashedFromNotebookId = notebookId;
+          note.trashedFromFolderId = folder.id;
+          note.notebookId = null;
+          note.folderId = null;
+        }
+      }
+      normalizeFolderOrders(next, notebookId);
+      if (next.settings.notesLastFolderId === folder.id) {
+        next.settings.notesLastFolderId = null;
+        next.settings.notesLastNoteId = null;
+        next.settings.notesPane = "list";
+      }
+      break;
+    }
+    case "folder:restore": {
+      const folder = requireFolder(next, operation.id, { trashed: true });
+      const notebook = getNotebook(next, folder.trashedFromNotebookId);
+      if (!notebook || notebook.trashedAt) throw new Error("请先恢复原笔记本");
+      folder.notebookId = notebook.id;
+      folder.trashedAt = null;
+      folder.trashedFromNotebookId = null;
+      folder.order = Object.values(next.folders).filter((item) => !item.trashedAt && item.notebookId === notebook.id && item.id !== folder.id).length;
+      folder.updatedAt = timestamp;
+      for (const note of Object.values(next.notes)) {
+        if (note.trashedAt && note.trashedFromFolderId === folder.id) {
+          note.trashedAt = null;
+          note.trashedFromNotebookId = null;
+          note.trashedFromFolderId = null;
+          note.notebookId = notebook.id;
+          note.folderId = folder.id;
+        }
+      }
+      normalizeFolderOrders(next, notebook.id);
+      break;
+    }
+    case "folder:deletePermanent": {
+      const folder = requireFolder(next, operation.id, { trashed: true });
+      const removedNoteIds = new Set();
+      for (const note of Object.values(next.notes)) {
+        if (note.trashedAt && note.trashedFromFolderId === folder.id) {
+          removedNoteIds.add(note.id);
+          delete next.notes[note.id];
+        }
+      }
+      delete next.folders[folder.id];
+      clearTaskNoteLinks(next, removedNoteIds);
+      resetMissingNoteNavigation(next);
+      break;
+    }
+    case "note:add": {
+      const { notebookId, folderId } = validateNoteLocation(next, operation.notebookId, operation.folderId);
       const id = randomUUID();
       const hasRichBody = Object.prototype.hasOwnProperty.call(operation, "richBody");
       const richBody = hasRichBody
@@ -824,15 +1124,18 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
         body: typeof operation.body === "string" ? operation.body : "",
         richBody,
         notebookId,
+        folderId,
         pinnedAt: null,
         createdAt: timestamp,
         updatedAt: timestamp,
         trashedAt: null,
         trashedFromNotebookId: null,
+        trashedFromFolderId: null,
         attachments: [],
       };
       next.settings.activeModule = "notes";
       next.settings.notesLastNotebookId = notebookId || "unfiled";
+      next.settings.notesLastFolderId = folderId;
       next.settings.notesLastNoteId = id;
       next.settings.notesPane = "editor";
       break;
@@ -861,10 +1164,11 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
     }
     case "note:move": {
       const note = requireNote(next, operation.id);
-      const notebookId = validateTargetNotebook(next, operation.notebookId);
-      if (note.notebookId === notebookId) changed = false;
+      const { notebookId, folderId } = validateNoteLocation(next, operation.notebookId, operation.folderId);
+      if (note.notebookId === notebookId && note.folderId === folderId) changed = false;
       else {
         note.notebookId = notebookId;
+        note.folderId = folderId;
         note.updatedAt = timestamp;
       }
       break;
@@ -881,7 +1185,9 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
       const note = requireNote(next, operation.id);
       note.trashedAt = timestamp;
       note.trashedFromNotebookId = note.notebookId;
+      note.trashedFromFolderId = note.folderId;
       note.notebookId = null;
+      note.folderId = null;
       if (next.settings.notesLastNoteId === note.id) {
         next.settings.notesLastNoteId = null;
         next.settings.notesPane = "list";
@@ -892,8 +1198,13 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
       const note = requireNote(next, operation.id, { trashed: true });
       const sourceNotebook = getNotebook(next, note.trashedFromNotebookId);
       note.notebookId = sourceNotebook && !sourceNotebook.trashedAt ? sourceNotebook.id : null;
+      const sourceFolder = getFolder(next, note.trashedFromFolderId);
+      note.folderId = sourceFolder && !sourceFolder.trashedAt && sourceFolder.notebookId === note.notebookId
+        ? sourceFolder.id
+        : null;
       note.trashedAt = null;
       note.trashedFromNotebookId = null;
+      note.trashedFromFolderId = null;
       break;
     }
     case "note:deletePermanent": {
@@ -918,7 +1229,14 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
           removedNotebooks += 1;
         }
       }
-      if (!removedNoteIds.size && !removedNotebooks) changed = false;
+      let removedFolders = 0;
+      for (const folder of Object.values(next.folders)) {
+        if (folder.trashedAt) {
+          delete next.folders[folder.id];
+          removedFolders += 1;
+        }
+      }
+      if (!removedNoteIds.size && !removedNotebooks && !removedFolders) changed = false;
       clearTaskNoteLinks(next, removedNoteIds);
       resetMissingNoteNavigation(next);
       break;
@@ -944,8 +1262,8 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
       const key = operation.key;
       const allowed = new Set([
         "windowMode", "locked", "launchAtLogin", "dayBoundaryHour",
-        "reducedMotion", "reducedTransparency", "windowBounds", "activeModule",
-        "notesLastNotebookId", "notesLastNoteId", "notesPane",
+        "reducedMotion", "reducedTransparency", "windowBounds", "windowMaximized", "activeModule",
+        "notesLastNotebookId", "notesLastFolderId", "notesLastNoteId", "notesPane",
         "notesSidebarCollapsed", "notesToolbarCollapsed",
       ]);
       if (!allowed.has(key)) throw new Error("不支持的设置");
@@ -976,6 +1294,20 @@ function applyOperation(state, operation, now = new Date(), { randomUUID = defau
         const value = operation.value;
         if (!NOTE_SYSTEM_VIEWS.includes(value) && (!getNotebook(next, value) || getNotebook(next, value).trashedAt)) {
           throw new Error("无效的笔记本位置");
+        }
+        if (next.settings[key] === value) changed = false;
+        else {
+          next.settings[key] = value;
+          next.settings.notesLastFolderId = null;
+        }
+      }
+      else if (key === "notesLastFolderId") {
+        const value = operation.value === null ? null : String(operation.value || "");
+        if (value) {
+          const folder = getFolder(next, value);
+          if (!folder || folder.trashedAt || folder.notebookId !== next.settings.notesLastNotebookId) {
+            throw new Error("无效的文件夹位置");
+          }
         }
         if (next.settings[key] === value) changed = false;
         else next.settings[key] = value;
@@ -1048,6 +1380,7 @@ function searchState(state, query, { limit = 100 } = {}) {
       title: note.title,
       body: note.body,
       notebookId: note.notebookId,
+      folderId: note.folderId,
       pinnedAt: note.pinnedAt,
       updatedAt: note.updatedAt,
     }));

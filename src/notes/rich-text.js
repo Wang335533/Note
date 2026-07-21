@@ -34,6 +34,16 @@ export const SIZE_OPTIONS = Object.freeze([
   { value: "24", label: "24", size: "24px" },
 ]);
 
+export const LINE_HEIGHT_OPTIONS = Object.freeze([
+  { value: "", label: "默认 1.72" },
+  { value: "1", label: "1.0" },
+  { value: "1.15", label: "1.15" },
+  { value: "1.5", label: "1.5" },
+  { value: "2", label: "2.0" },
+  { value: "2.5", label: "2.5" },
+  { value: "3", label: "3.0" },
+]);
+
 export const BLOCK_OPTIONS = Object.freeze([
   { value: "paragraph", label: "正文" },
   { value: "heading-1", label: "标题 1" },
@@ -47,6 +57,7 @@ const FONT_BY_VALUE = new Map(FONT_OPTIONS.map((option) => [option.value, option
 const FONT_BY_FAMILY = new Map(FONT_OPTIONS.map((option) => [option.family.toLocaleLowerCase(), option]));
 const SIZE_BY_VALUE = new Map(SIZE_OPTIONS.map((option) => [option.value, option]));
 const SIZE_BY_SIZE = new Map(SIZE_OPTIONS.map((option) => [option.size, option]));
+const LINE_HEIGHT_VALUES = new Set(LINE_HEIGHT_OPTIONS.map((option) => option.value).filter(Boolean));
 const STYLE_TOKEN = /\uE000([FS])([+-])(?::([^\uE001]+))?\uE001/g;
 
 export function fontFamilyFor(value) {
@@ -84,6 +95,59 @@ const NoteInlineMath = InlineMath.extend({
 const NoteBlockMath = BlockMath.extend({
   addInputRules() {
     return [];
+  },
+});
+
+function setSelectedTextBlockLineHeight(state, dispatch, value) {
+  const lineHeight = LINE_HEIGHT_VALUES.has(value) ? value : null;
+  const textBlockTypes = new Set(["paragraph", "heading"]);
+  const { from, to, empty, $from } = state.selection;
+  let transaction = state.tr;
+  let changed = false;
+  const updateNode = (node, position) => {
+    if (!textBlockTypes.has(node.type.name) || node.attrs.lineHeight === lineHeight) return;
+    transaction = transaction.setNodeMarkup(position, undefined, { ...node.attrs, lineHeight });
+    changed = true;
+  };
+
+  if (empty) {
+    for (let depth = $from.depth; depth > 0; depth -= 1) {
+      const node = $from.node(depth);
+      if (!textBlockTypes.has(node.type.name)) continue;
+      updateNode(node, $from.before(depth));
+      break;
+    }
+  } else {
+    state.doc.nodesBetween(from, to, (node, position) => updateNode(node, position));
+  }
+  if (changed && dispatch) dispatch(transaction);
+  return changed;
+}
+
+const NoteParagraphLineHeight = Extension.create({
+  name: "noteParagraphLineHeight",
+  addGlobalAttributes() {
+    return [{
+      types: ["paragraph", "heading"],
+      attributes: {
+        lineHeight: {
+          default: null,
+          parseHTML: (element) => {
+            const value = String(element.style.lineHeight || "").trim();
+            return LINE_HEIGHT_VALUES.has(value) ? value : null;
+          },
+          renderHTML: (attributes) => attributes.lineHeight
+            ? { style: `line-height: ${attributes.lineHeight}` }
+            : {},
+        },
+      },
+    }];
+  },
+  addCommands() {
+    return {
+      setParagraphLineHeight: (value) => ({ state, dispatch }) => setSelectedTextBlockLineHeight(state, dispatch, value),
+      unsetParagraphLineHeight: () => ({ state, dispatch }) => setSelectedTextBlockLineHeight(state, dispatch, null),
+    };
   },
 });
 
@@ -226,6 +290,7 @@ export function createEditorExtensions({
     TextStyle,
     FontFamily,
     FontSize,
+    NoteParagraphLineHeight,
     TaskList,
     TaskItem.configure({ nested: true }),
     NoteInlineMath.configure({ onClick: (node, pos) => onMathClick(node, pos, "inline"), katexOptions }),
@@ -510,12 +575,16 @@ export function formatStateForEditor(editor, painterActive = false) {
       code: false,
       font: "",
       size: "",
+      lineHeight: "",
       block: "paragraph",
       canClear: false,
       painterActive,
     };
   }
   const textStyle = editor.getAttributes("textStyle");
+  const lineHeightAttrs = editor.isActive("heading")
+    ? editor.getAttributes("heading")
+    : editor.getAttributes("paragraph");
   const block = editor.isActive("heading", { level: 1 }) ? "heading-1"
     : editor.isActive("heading", { level: 2 }) ? "heading-2"
       : editor.isActive("heading", { level: 3 }) ? "heading-3"
@@ -533,6 +602,7 @@ export function formatStateForEditor(editor, painterActive = false) {
     code: editor.isActive("code"),
     font: fontValueFor(textStyle.fontFamily),
     size: sizeValueFor(textStyle.fontSize),
+    lineHeight: LINE_HEIGHT_VALUES.has(lineHeightAttrs.lineHeight) ? lineHeightAttrs.lineHeight : "",
     block,
     canClear: !editor.state.selection.empty,
     painterActive,
