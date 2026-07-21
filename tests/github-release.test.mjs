@@ -16,6 +16,7 @@ test("public package metadata points to the canonical GitHub repository", () => 
 });
 
 test("known vulnerable development dependencies stay on patched versions", () => {
+  assert.equal(packageJson.devDependencies?.["@floating-ui/dom"], "1.8.0");
   assert.equal(packageJson.devDependencies?.vite, "6.4.3");
   assert.equal(packageJson.overrides?.["shell-quote"], "1.10.0");
 });

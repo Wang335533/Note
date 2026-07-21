@@ -40,6 +40,7 @@
     "package:fast": "npm run build && electron-builder --win dir"
   },
   "devDependencies": {
+    "@floating-ui/dom": "1.8.0",
     "@phosphor-icons/core": "2.1.1",
     "@phosphor-icons/react": "2.1.10",
     "@tiptap/core": "3.28.0",
