@@ -30,7 +30,8 @@ const RICH_MARK_TYPES = new Set([
 ]);
 
 const NOTE_FONT_VALUES = new Set(["songti", "kaiti", "simhei", "times-new-roman", "monospace"]);
-const NOTE_SIZE_VALUES = new Set(["12", "14", "16", "20", "24"]);
+const NOTE_SIZE_SEQUENCE = Object.freeze(["12", "14", "16", "20", "24"]);
+const NOTE_SIZE_VALUES = new Set(NOTE_SIZE_SEQUENCE);
 const NOTE_FONT_FAMILIES = new Set(["SimSun", "KaiTi", "SimHei", "Times New Roman", "Cascadia Code"]);
 const NOTE_FONT_SIZES = new Set(["12px", "14px", "16px", "20px", "24px"]);
 const NOTE_LINE_HEIGHTS = new Set(["1", "1.15", "1.5", "1.72", "2", "2.5", "3"]);
@@ -39,6 +40,24 @@ const INLINE_NODE_TYPES = new Set(["text", "hardBreak", "inlineMath"]);
 const MAX_RICH_NODES = 50000;
 const MAX_RICH_TEXT = 5 * 1024 * 1024;
 const MAX_LATEX_TEXT = 128 * 1024;
+
+function defaultNoteSizeForBlock(block) {
+  if (block === "heading-1") return "24";
+  if (block === "heading-2") return "20";
+  if (block === "heading-3") return "16";
+  return "14";
+}
+
+function stepNoteSize(value, direction, block = "paragraph") {
+  const current = NOTE_SIZE_VALUES.has(String(value || ""))
+    ? String(value)
+    : defaultNoteSizeForBlock(block);
+  const index = NOTE_SIZE_SEQUENCE.indexOf(current);
+  const delta = direction === "increase" ? 1 : direction === "decrease" ? -1 : 0;
+  if (!delta) return null;
+  const nextIndex = Math.max(0, Math.min(NOTE_SIZE_SEQUENCE.length - 1, index + delta));
+  return nextIndex === index ? null : NOTE_SIZE_SEQUENCE[nextIndex];
+}
 
 function emptyRichBody() {
   return { type: "doc", content: [{ type: "paragraph" }] };
@@ -410,6 +429,7 @@ function plainTextFromRichBody(value) {
 
 module.exports = {
   NOTE_FONT_VALUES,
+  NOTE_SIZE_SEQUENCE,
   NOTE_SIZE_VALUES,
   RICH_BODY_VERSION,
   emptyRichBody,
@@ -418,5 +438,6 @@ module.exports = {
   migrateMathInRichBody,
   normalizeRichBody,
   plainTextFromRichBody,
+  stepNoteSize,
   stripOwnFormatMarkers,
 };

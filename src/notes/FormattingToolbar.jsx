@@ -16,7 +16,13 @@ import {
   TextUnderline,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { BLOCK_OPTIONS, FONT_OPTIONS, LINE_HEIGHT_OPTIONS, SIZE_OPTIONS } from "./rich-text.js";
+import {
+  BLOCK_OPTIONS,
+  FONT_OPTIONS,
+  LINE_HEIGHT_OPTIONS,
+  nextFontSizeValue,
+  SIZE_OPTIONS,
+} from "./rich-text.js";
 
 function FormatButton({ label, active = false, disabled = false, onClick, children }) {
   return (
@@ -100,6 +106,8 @@ export function FormattingToolbar({
   const paragraphValue = BLOCK_OPTIONS.some((option) => option.value === formatState.block)
     ? formatState.block
     : "paragraph";
+  const canDecreaseFont = Boolean(nextFontSizeValue(formatState.size, "decrease", formatState.block));
+  const canIncreaseFont = Boolean(nextFontSizeValue(formatState.size, "increase", formatState.block));
 
   const submitLink = (event) => {
     event.preventDefault();
@@ -137,6 +145,16 @@ export function FormattingToolbar({
           </select>
         </label>
         <span className="format-divider" aria-hidden="true" />
+        <FormatButton
+          label="缩小一号字体（Ctrl + [）"
+          disabled={!canDecreaseFont}
+          onClick={() => editorRef.current?.stepFontSize?.("decrease")}
+        ><span className="font-step-symbol" aria-hidden="true"><b>A</b><i>↓</i></span></FormatButton>
+        <FormatButton
+          label="放大一号字体（Ctrl + ]）"
+          disabled={!canIncreaseFont}
+          onClick={() => editorRef.current?.stepFontSize?.("increase")}
+        ><span className="font-step-symbol" aria-hidden="true"><b>A</b><i>↑</i></span></FormatButton>
         <FormatButton label="加粗" active={formatState.bold} onClick={() => applyInline("bold")}><TextB size={16} weight="bold" /></FormatButton>
         <FormatButton label="斜体" active={formatState.italic} onClick={() => applyInline("italic")}><TextItalic size={16} /></FormatButton>
         <FormatButton label="下划线" active={formatState.underline} onClick={() => applyInline("underline")}><TextUnderline size={16} /></FormatButton>

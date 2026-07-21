@@ -6,6 +6,7 @@ const {
   markdownFromRichBody,
   migrateMathInRichBody,
   plainTextFromRichBody,
+  stepNoteSize,
   stripOwnFormatMarkers,
 } = require("../shared/rich-text.cjs");
 const {
@@ -45,6 +46,17 @@ const formattedDocument = {
     },
   ],
 };
+
+test("Word-style font stepping follows the supported size scale and block defaults", () => {
+  assert.equal(stepNoteSize("", "increase", "paragraph"), "16");
+  assert.equal(stepNoteSize("", "decrease", "paragraph"), "12");
+  assert.equal(stepNoteSize("16", "increase", "paragraph"), "20");
+  assert.equal(stepNoteSize("16", "decrease", "paragraph"), "14");
+  assert.equal(stepNoteSize("", "decrease", "heading-1"), "20");
+  assert.equal(stepNoteSize("", "increase", "heading-2"), "24");
+  assert.equal(stepNoteSize("24", "increase", "paragraph"), null);
+  assert.equal(stepNoteSize("12", "decrease", "paragraph"), null);
+});
 
 test("rich documents validate with a strict node and mark allowlist", () => {
   assert.equal(isRichBody(emptyRichBody()), true);
