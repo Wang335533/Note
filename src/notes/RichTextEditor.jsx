@@ -3,7 +3,7 @@ import { Fragment } from "@tiptap/pm/model";
 import katex from "katex";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import * as richTextModule from "desktop-note/rich-text";
+import richTextModule from "desktop-note/rich-text";
 import { noteAssetUrl } from "desktop-note/library-files";
 import { noteApi } from "../api.js";
 import {
@@ -16,6 +16,7 @@ import {
   migrateRichBodyMath,
   migratePastedMathSlice,
   richBodyFromLegacyMarkdown,
+  stepFontSizeForEditor,
 } from "./rich-text.js";
 
 const { markdownFromRichBody, plainTextFromRichBody } = richTextModule;
@@ -516,6 +517,10 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       return value
         ? chain.setParagraphLineHeight(value).run()
         : chain.unsetParagraphLineHeight().run();
+    },
+    stepFontSize(direction) {
+      if (!editorIsReady(editor) || readOnly) return false;
+      return stepFontSizeForEditor(editor, direction);
     },
     clearFormatting() {
       if (!editorIsReady(editor) || readOnly || editor.state.selection.empty) return false;

@@ -466,6 +466,20 @@ test("one-level folders preserve note location across navigation, trash, restore
   state = applyOperation(state, { type: "folder:move", id: "folder-mechanism", notebookId: "notebook-materials" }, now);
   assert.equal(state.folders["folder-mechanism"].notebookId, "notebook-materials");
   assert.equal(state.notes["note-mediator"].notebookId, "notebook-materials");
+  state = applyOperation(state, { type: "folder:add", notebookId: "notebook-materials", name: "异质性" }, now, {
+    randomUUID: () => "folder-heterogeneity",
+  });
+  state = applyOperation(state, {
+    type: "note:move",
+    id: "note-mediator",
+    notebookId: "notebook-materials",
+    folderId: "folder-heterogeneity",
+  }, now);
+  assert.equal(state.notes["note-mediator"].folderId, "folder-heterogeneity");
+  assert.equal(state.notes["note-mediator"].notebookId, "notebook-materials");
+  state = applyOperation(state, { type: "note:move", id: "note-mediator", notebookId: null, folderId: null }, now);
+  assert.equal(state.notes["note-mediator"].folderId, null);
+  assert.equal(state.notes["note-mediator"].notebookId, null);
   assert.throws(() => applyOperation(state, {
     type: "folder:add",
     notebookId: "notebook-materials",

@@ -279,6 +279,34 @@ try {
     selection.removeAllRanges();
     selection.addRange(range);
     editor.focus();
+    document.querySelector('button[aria-label^="放大一号字体"]')?.click();
+  })()`);
+  const increasedFontSize = await waitFor(
+    cdp.send,
+    `(() => {
+      const styled = document.querySelector('.rich-note-prosemirror [style*="font-size: 16px"]');
+      return styled ? getComputedStyle(styled).fontSize : null;
+    })()`,
+    "the increased rich-text font size",
+  );
+  await evaluate(cdp.send, `document.querySelector('button[aria-label^="缩小一号字体"]')?.click()`);
+  const decreasedFontSize = await waitFor(
+    cdp.send,
+    `(() => {
+      const styled = document.querySelector('.rich-note-prosemirror [style*="font-size: 14px"]');
+      return styled ? getComputedStyle(styled).fontSize : null;
+    })()`,
+    "the decreased rich-text font size",
+  );
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
     const more = document.querySelector('button[aria-label="更多格式"]');
     if (!document.querySelector('.more-format-popover')) more?.click();
     const lineHeight = document.querySelectorAll('.more-format-popover select')[2];
@@ -345,6 +373,8 @@ try {
     legacyMigration,
     legacyPersistence,
     richEditor,
+    increasedFontSize,
+    decreasedFontSize,
     lineHeightEditor,
     formulaEditor,
   }, null, 2));

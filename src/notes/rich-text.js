@@ -11,10 +11,15 @@ import { Fragment, Slice } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
 import { marked } from "marked";
 import "katex/dist/katex.min.css";
-import * as richTextModule from "desktop-note/rich-text";
+import richTextModule from "desktop-note/rich-text";
 import { attachmentIdFromUrl } from "desktop-note/library-files";
 
-const { emptyRichBody, migrateMathInRichBody, normalizeRichBody } = richTextModule;
+const {
+  emptyRichBody,
+  migrateMathInRichBody,
+  normalizeRichBody,
+  stepNoteSize,
+} = richTextModule;
 
 export const FONT_OPTIONS = Object.freeze([
   { value: "", label: "默认", family: "" },
@@ -74,6 +79,18 @@ export function fontSizeFor(value) {
 
 export function sizeValueFor(size) {
   return SIZE_BY_SIZE.get(String(size || ""))?.value || "";
+}
+
+export function nextFontSizeValue(value, direction, block = "paragraph") {
+  return stepNoteSize(value, direction, block);
+}
+
+export function stepFontSizeForEditor(editor, direction) {
+  if (!editor || editor.isDestroyed || editor.isActive("codeBlock")) return false;
+  const state = formatStateForEditor(editor);
+  const next = nextFontSizeValue(state.size, direction, state.block);
+  if (!next) return false;
+  return editor.chain().focus().setFontSize(fontSizeFor(next)).run();
 }
 
 const EscapeCancelsPainter = Extension.create({
@@ -147,6 +164,16 @@ const NoteParagraphLineHeight = Extension.create({
     return {
       setParagraphLineHeight: (value) => ({ state, dispatch }) => setSelectedTextBlockLineHeight(state, dispatch, value),
       unsetParagraphLineHeight: () => ({ state, dispatch }) => setSelectedTextBlockLineHeight(state, dispatch, null),
+    };
+  },
+});
+
+const NoteFontSizeStep = Extension.create({
+  name: "noteFontSizeStep",
+  addKeyboardShortcuts() {
+    return {
+      "Mod-[": () => stepFontSizeForEditor(this.editor, "decrease"),
+      "Mod-]": () => stepFontSizeForEditor(this.editor, "increase"),
     };
   },
 });
@@ -290,6 +317,7 @@ export function createEditorExtensions({
     TextStyle,
     FontFamily,
     FontSize,
+    NoteFontSizeStep,
     NoteParagraphLineHeight,
     TaskList,
     TaskItem.configure({ nested: true }),
