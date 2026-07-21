@@ -19,10 +19,10 @@ jobs:
 
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
@@ -68,12 +68,26 @@ jobs:
       - name: Publish GitHub Release
         shell: pwsh
         run: |
-          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          $releaseApi = "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME"
+          $existingDraft = gh api $releaseApi --jq '.draft' 2> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME $env:INSTALLER_PATH release/SHA256SUMS.txt --clobber --repo $env:GITHUB_REPOSITORY
+            if ($existingDraft -eq "false") {
+              Write-Host "Release $env:GITHUB_REF_NAME is already published; immutable releases are never overwritten."
+              exit 0
+            }
           } else {
-            gh release create $env:GITHUB_REF_NAME $env:INSTALLER_PATH release/SHA256SUMS.txt --verify-tag --generate-notes --title "Note $env:NOTE_VERSION" --repo $env:GITHUB_REPOSITORY
+            gh release create $env:GITHUB_REF_NAME --draft --verify-tag --generate-notes --title "Note $env:NOTE_VERSION" --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) {
+              throw "GitHub Release draft creation failed with exit code $LASTEXITCODE."
+            }
           }
+
+          gh release upload $env:GITHUB_REF_NAME $env:INSTALLER_PATH release/SHA256SUMS.txt --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release asset upload failed with exit code $LASTEXITCODE."
+          }
+
+          gh release edit $env:GITHUB_REF_NAME --draft=false --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
             throw "GitHub Release publishing failed with exit code $LASTEXITCODE."
           }
