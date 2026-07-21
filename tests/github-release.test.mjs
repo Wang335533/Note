@@ -23,6 +23,8 @@ test("known vulnerable development dependencies stay on patched versions", () =>
 
 test("CI uses locked dependencies with read-only repository access", () => {
   assert.match(ci, /permissions:\s*\n\s*contents: read/);
+  assert.match(ci, /actions\/checkout@v6/);
+  assert.match(ci, /actions\/setup-node@v6/);
   assert.match(ci, /node-version: 24/);
   assert.match(ci, /npm ci/);
   assert.match(ci, /npm test/);
@@ -33,6 +35,8 @@ test("tagged Windows releases are version-checked and published with a checksum"
   assert.match(release, /tags:\s*\n\s*- ["']v\*\.\*\.\*["']/);
   assert.match(release, /permissions:\s*\n\s*contents: write/);
   assert.match(release, /GITHUB_REF_NAME/);
+  assert.match(release, /actions\/checkout@v6/);
+  assert.match(release, /actions\/setup-node@v6/);
   assert.match(release, /node-version: 24/);
   assert.match(release, /npm run package:installer/);
   assert.match(release, /Get-FileHash/);
@@ -41,5 +45,5 @@ test("tagged Windows releases are version-checked and published with a checksum"
 });
 
 test("generated installers stay out of Git history", () => {
-  assert.match(gitignore, /(?:^|\n)release\/(?:\n|$)/);
+  assert.ok(gitignore.split(/\r?\n/).includes("release/"));
 });
