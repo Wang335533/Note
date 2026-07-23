@@ -6,6 +6,7 @@ const {
   markdownFromRichBody,
   migrateMathInRichBody,
   plainTextFromRichBody,
+  renderNoteFontFamily,
   stepNoteSize,
   stripOwnFormatMarkers,
 } = require("../shared/rich-text.cjs");
@@ -56,6 +57,15 @@ test("Word-style font stepping follows the supported size scale and block defaul
   assert.equal(stepNoteSize("", "increase", "heading-2"), "24");
   assert.equal(stepNoteSize("24", "increase", "paragraph"), null);
   assert.equal(stepNoteSize("12", "decrease", "paragraph"), null);
+});
+
+test("Times New Roman uses the Latin slot and keeps the contextual East Asian font", () => {
+  assert.equal(
+    renderNoteFontFamily("Times New Roman"),
+    '"Times New Roman", var(--note-east-asian-font-family)',
+  );
+  assert.equal(renderNoteFontFamily("SimSun"), "SimSun");
+  assert.equal(renderNoteFontFamily(""), "");
 });
 
 test("rich documents validate with a strict node and mark allowlist", () => {

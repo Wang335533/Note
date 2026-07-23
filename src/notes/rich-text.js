@@ -18,6 +18,7 @@ const {
   emptyRichBody,
   migrateMathInRichBody,
   normalizeRichBody,
+  renderNoteFontFamily,
   stepNoteSize,
 } = richTextModule;
 
@@ -178,6 +179,23 @@ const NoteFontSizeStep = Extension.create({
   },
 });
 
+const NoteFontFamily = FontFamily.extend({
+  addGlobalAttributes() {
+    return (this.parent?.() || []).map((group) => ({
+      ...group,
+      attributes: {
+        ...group.attributes,
+        fontFamily: {
+          ...group.attributes.fontFamily,
+          renderHTML: (attributes) => attributes.fontFamily
+            ? { style: `font-family: ${renderNoteFontFamily(attributes.fontFamily)}` }
+            : {},
+        },
+      },
+    }));
+  },
+});
+
 function replaceMathInput({ state, range, latex, type, trailingSpace = false }) {
   const value = String(latex || "").trim();
   if (!value || (type === "inlineMath" && /^\d+(?:[.,]\d+)?$/.test(value))) return;
@@ -315,7 +333,7 @@ export function createEditorExtensions({
       },
     }),
     TextStyle,
-    FontFamily,
+    NoteFontFamily,
     FontSize,
     NoteFontSizeStep,
     NoteParagraphLineHeight,
