@@ -1,6 +1,6 @@
 {
   "name": "desktop-note",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "A calm, local-first daily note and checklist for the Windows desktop.",
   "author": "Wang335533",
   "license": "MIT",
@@ -35,7 +35,6 @@
     "preview": "vite preview --host 127.0.0.1",
     "desktop": "npm run build && electron .",
     "test": "node --test tests/*.test.cjs tests/*.test.mjs",
-    "package:win": "npm run package:installer",
     "package:installer": "npm run build && electron-builder --win nsis --publish never",
     "package:fast": "npm run build && electron-builder --win dir"
   },

@@ -1,62 +1,57 @@
-# Prototype Instructions
+# Note 项目指令
 
-Run the local server yourself and open the preview in the browser available to this environment. Do not give the user server-start instructions when you can run it.
+## 定位
 
-Before making substantial visual changes, use the Product Design plugin's `get-context` skill when the visual source is unclear or no longer matches the current goal. When the user gives durable prototype-specific design feedback, preferences, or decisions, record them in `AGENTS.md`.
+Note 是一个 Windows 本地优先桌面应用：`Todo` 负责“一页今日”，`Notes` 负责长期结构化笔记。两个模块同级、可互相链接，但生命周期彼此独立。详细产品取舍以 `docs/PRODUCT.md` 为准，使用与发布说明以 `README.md` 为准。
 
-When implementing from a selected generated mock, treat that image as the source of truth for layout, component anatomy, density, spacing, color, typography, visible content, and hierarchy.
+## 运行与门禁
 
-## Durable product decisions
+- Node.js：`>=22.12.0`，CI 使用 Node.js 24。
+- 开发桌面版：`npm run desktop:dev`；仅浏览器预览：`npm run dev`。
+- 提交前至少运行：`npm test`、`npm run build`。
+- 涉及 Electron、持久化、升级或富文本时，再运行：`npm run smoke:desktop`。
+- Windows 安装包：`npm run package:installer`；正式发布只由 `vX.Y.Z` 标签触发 GitHub Actions。
 
-- The user selected concept 1, “一页今日”, as the visual and interaction direction.
-- The main card stays intentionally sparse: date, progress, 今日三件, 今天, 已完成, one quick-entry field, and save status.
-- Advanced controls belong in the tray, keyboard shortcuts, or an in-card settings sheet rather than the default card.
-- The workday changes at 04:00. Unfinished tasks are reviewed instead of silently rolling over.
-- The app is local-first and must save every mutation immediately. Desktop and temporary always-on-top modes are both required.
-- Task time ranges are optional, use 24-hour time in 15-minute increments, may overlap or cross midnight, and never change manual task ordering.
-- Time selection stays collapsed behind a clock affordance and opens as a compact two-column popover; it requires explicit confirmation, rejects equal start/end values, and resets after each successful task creation.
-- Existing task times can be edited or cleared. Untimed tasks show no time metadata; completed tasks strike only the task text while the time label merely fades.
-- Motion should feel localized and restrained. Focusing or clicking inside Note must not animate or scale the entire card.
-- Renderer state may accept an equal revision for newer runtime information, but must never move back to a lower persisted revision.
-- Browser preview behavior must stay aligned with the desktop Store, including validation, rollover, ordering, and visible fixture data; preview-only hidden tasks are not allowed.
-- Desktop and browser preview must call the single Store in `shared/store.cjs`; `src/api.js` only owns browser fixture, localStorage, events, and download adaptation.
-- Empty or invalid operations are rejected without changing revision or writing state.
-- If a requested Windows window layer fails, Note falls back to normal-window mode, persists that fallback, and shows a compact non-modal warning in settings.
-- Local diagnostics contain technical failures only, never task text. Keep `note-error.log` at or below 512 KB with at most one `note-error.log.old` rotation.
-- Releases contain only the directly runnable directory and the NSIS installer. Do not ship a self-extracting portable build because its extraction delay is easy to mistake for application startup time.
-- Keep full-card startup motion out of the desktop runtime. Initialize tray and global-shortcut services after the first window reveal, while preserving localized task and popover motion.
-- Keep hardware acceleration enabled by default; visual compositing and responsive interaction take priority over misleading private-memory reductions from disabling the GPU process.
-- The frameless Note window resizes natively from all four edges and corners without permanent resize controls. Width and height are independent, remembered with position, have a 420×660 minimum but no artificial maximum, and support standard maximize/restore while preserving the normal bounds separately.
-- The product remains one cohesive Note application framework with two first-class peer modules: the existing date-based Todo List and an independent, long-lived structured notes library. Todo List must not be treated as a separate app, legacy screen, or secondary add-on, and notes do not participate in the 04:00 workday boundary or task rollover.
-- The notes library is notebook-first. Each note belongs to at most one notebook and optionally one first-level folder inside that notebook. The library includes system views for all notes, unfiled notes, and trash; tags and folders nested beyond one level remain out of scope.
-- Notes use an adaptive master-detail layout: from 420–639 px the note list and editor occupy separate navigable views, while from 640 px upward the list and editor appear side by side. Notebook navigation uses a drawer or compact menu instead of a permanent third column, and the reading column stays bounded and centered in maximized windows.
-- Rich note bodies use a validated Tiptap/ProseMirror JSON tree as the canonical editable representation. The interface is WYSIWYG and never exposes Markdown or HTML markers during ordinary editing.
-- Every rich-body save also derives a clean Markdown interoperability projection for search, legacy compatibility, and export. Standard semantics survive export; visual-only font family, font size, and underline metadata intentionally do not leak into Markdown.
-- Creating a note opens a blank editor immediately. A note title may remain empty while drafting; the first non-empty body line can provide a title suggestion without replacing the independent title field.
-- The notes library is managed internally as Note's single canonical source. It does not watch or synchronize an externally editable Markdown vault, but full-library export preserves the notebook/first-level-folder Markdown hierarchy so users can recover and move their content.
-- Todo items and notes may be linked while keeping independent lifecycles. A task can open its related note, and selected note text can create a Todo item with a backlink; task completion, rollover, deletion, and note editing must not silently mutate the other record's content or completion state.
-- Note restores the last active module and navigation position on ordinary launch, reopen, hide/show, and window-mode changes. When a new workday has a pending rollover review, startup routes to Todo for that review first; completing or dismissing the review then returns control without discarding the saved Notes context.
-- Module switching must always remain directly clickable inside the Note window; global shortcuts are accelerators, not replacements for visible navigation. Keep `Ctrl + Alt + Space` as the fixed Todo quick-entry shortcut, add `Ctrl + Alt + Shift + N` to create and open a blank note, and keep `Ctrl + Alt + N` dedicated to showing or hiding Note.
-- The persistent app header keeps the Note wordmark on the left, a directly clickable `Todo | Notes` segmented switch centered in the existing header height, and module-specific actions on the right. Switching modules replaces only the content workspace, preserves each module's navigation context, and never animates or scales the full card.
-- Note provides one locally executed unified search, opened by a visible affordance or `Ctrl + K`, across note titles, rich-body plain text, and Todo items from every stored workday. Results are grouped by notes, open tasks, and completed tasks; search appears as a temporary overlay rather than a permanently visible field, and selecting a result must reveal its real source context.
-- Selecting a historical Todo search result opens a temporary read-only review layer for that workday, highlights the matched task, and never changes `activeDay`, rollover state, or historical content. The review layer may explicitly copy a task into today or open its related note, but it does not provide in-place history editing.
-- Rich notes support pasted or dragged PNG, JPEG, and WebP images stored in Note's internally managed attachments area and referenced through stable internal asset URLs. Full-library Markdown export must copy those assets and rewrite or preserve valid relative references. PDF, document, and data files remain external links in the first release; Note does not copy, manage, or preview arbitrary attachments.
-- Note lists place pinned notes in a dedicated section first and sort all remaining notes by most recent `updatedAt` by default. Users may temporarily sort by title or creation time, but the first release does not support manual drag ordering of individual notes.
-- Deleting a note moves it to Trash without automatic expiry. Restore, permanent deletion, and emptying Trash are explicit user actions; canonical rich content and Note-managed images are removed only after permanent deletion, never merely when the note enters Trash.
-- Deleting a non-empty notebook moves the notebook and every contained note into Trash together rather than moving its notes to Unfiled or blocking deletion. The confirmation must state the affected note count, and this operation must remain reversible until an explicit permanent-deletion action.
-- Trash supports restoring a deleted notebook as a whole or restoring an individual note from inside that deleted notebook. An individually restored note becomes Unfiled while the notebook remains in Trash, and restoration must never duplicate note content or managed images.
-- Restoring a deleted notebook later restores only the notes that still remain in Trash. Notes previously restored individually stay Unfiled and are never silently moved back into the restored notebook.
-- Markdown import lets users select one or multiple `.md` files, choose a destination notebook or first-level folder, derive a suggested title from the filename or first heading, and explicitly approve copying resolvable local images. It does not attempt full vault or arbitrary directory-hierarchy migration.
-- Note is a standalone per-installation application, never a shared multi-user content service. Every installed copy keeps its Todo history, notes, notebooks, and managed images under that machine's current Windows user's Electron `userData`; releases must never bundle persisted developer state or another user's content, development-only reference fixtures must never initialize the packaged desktop app, and there is no automatic cross-device synchronization.
-- Note formatting uses Tiptap/ProseMirror commands and stored marks; formatting controls must never inject literal `<font>` or `<span>` source into visible text. Exact legacy Note-owned font and size markers are migrated once into real marks; malformed own markers are stripped without losing their text, while code blocks and unrelated HTML markers are not rewritten by that cleanup.
-- The notes formatting toolbar is one calm row of common actions with font, size, and low-frequency controls in compact popovers. It can collapse to a symbol-only `>` affordance, remembers the user's last choice, and never applies formatting to the plain-text note title.
-- The wide notes master list can be fully collapsed and restored from the editor header. Its last manual state is remembered; narrow windows continue to use the adaptive single-pane navigation without overwriting that preference.
-- Supported formatting is paragraph style, the fixed font and size sets, Word-style paragraph line spacing, bold, italic, underline, strikethrough, bullets, numbering, checklist, quote, code, link, a single-use format painter, and selection-only clear formatting. Line spacing is stored on paragraph/heading nodes and excluded from Markdown. Text color, highlighting, alignment, and persistent formatting shortcuts remain out of scope; Escape cancels transient format UI and the painter.
-- Normal rich paste keeps only Note-supported formatting and managed image behavior; unsupported colors, backgrounds, alignment, scripts, and hidden styling are discarded. The native editor context menu offers a separate plain-text paste command and right-click never opens settings.
-- Checked checklist lines inside note bodies strike through with localized motion and reverse cleanly when unchecked.
-- Rich editor synchronization must ignore Tiptap instances whose `isDestroyed` flag is true. During keyed editor replacement React may expose the previous instance for one render, and no command may access its cleared `commandManager`.
-- Active notes can move from the note-list overflow action or its context menu into Unfiled, any notebook root, or any active first-level folder, including from one folder to another; successful moves open the note in its destination.
-- The common formatting row includes Word-style decrease/increase-font buttons. They traverse Note's fixed size scale, respect heading defaults, stop at the supported boundaries, and mirror Word's `Ctrl + [` / `Ctrl + ]` shortcuts.
-- Mathematical expressions are first-class `inlineMath` and `blockMath` nodes rendered locally with KaTeX, never HTML-shaped visible text. Support `$…$`, `\(…\)`, `$$…$$`, and `\[…\]` on type or paste outside code, keep ordinary currency such as `$100$` as text, edit a formula by clicking its rendered output, and serialize copied/exported formulas back to portable LaTeX delimiters. Invalid LaTeX must preserve its source and must never crash or erase the note.
-- Keep `appId`, product identity, and the `userData/note-data` location stable across releases. Before a newer app version can write migrated state, keep exactly one durable pre-upgrade state snapshot; rollback automatically on migration failure, retain data through normal uninstall/reinstall, and refuse an older app version permission to overwrite data marked by a newer release.
-- Packaged desktop smoke tests must set an explicit temporary `NOTE_SMOKE_USER_DATA` path. Changing only `APPDATA` is not sufficient isolation on Windows and must never be relied on when exercising a release executable.
+## 技术栈与目录
+
+- Electron 主进程：`electron/`；React/Vite 渲染层：`src/`。
+- 唯一业务 Store、schema 和跨进程共享规则：`shared/`。
+- 自动化门禁：`tests/`；打包辅助与 smoke：`scripts/`。
+- `shared/store.cjs` 是桌面端和浏览器预览的单一状态规则；浏览器 API 只适配 fixture、localStorage、事件与下载。
+- CommonJS/ESM 同时需要的共享能力只保留一份实现；另一种模块格式必须是薄适配层，不复制业务逻辑。
+
+## 不可破坏的数据合同
+
+- 主进程是正式数据唯一真源；渲染层只通过受限 IPC 操作，不能直接访问文件系统。
+- 数据只保存在当前 Windows 用户的 Electron `userData/note-data`，没有远程同步端点。
+- 保持 `appId=local.desktop.note`、产品名和数据目录稳定；升级安装不得创建一套新数据。
+- 新版本写入迁移状态前保留且只保留一个升级前快照；迁移失败自动恢复，旧版本不得覆盖新 schema 数据。
+- 每次 mutation 原子持久化；较低 revision 不能覆盖较高 revision；无效或空操作不增加 revision。
+- 正式包不得包含开发 fixture、开发者状态、真实笔记、缓存或本地产物。
+
+## 不可破坏的产品合同
+
+- Todo 在 04:00 换日；未完成任务进入逐项复核，不自动顺延。
+- 每日前三项自动进入“今日三件”；任务始终保持手动顺序。
+- 时间段可选，24 小时制、15 分钟步进，可重叠和跨午夜；未设置时不显示。
+- Notes 只支持“笔记本 → 一级文件夹 → 笔记”，不加入多级文件夹或标签。
+- 富文本以经验证的 Tiptap/ProseMirror JSON 为编辑真源，并派生干净 Markdown 用于搜索、兼容与导出。
+- 受管图片仅限 PNG/JPEG/WebP，放在内部 attachments 目录；永久删除前不得删除正文或图片。
+- Todo 与 Notes 的链接不改变双方独立的完成、删除、换日与编辑状态。
+
+## 不可破坏的界面与运行合同
+
+- 默认界面保持低密度；高级控制放入托盘、快捷键、设置页或紧凑弹层。
+- 不对整张卡片做点击/聚焦缩放；动效必须局部、克制，并服从“减少动效”。
+- 无边框窗口最小 420×660，宽高独立，允许四边/四角缩放与标准最大化，不设人为最大尺寸。
+- Notes 在 420–639px 使用单栏导航，640px 起使用列表+编辑器；最大化时阅读列保持有界居中。
+- Windows 层级切换失败时回退普通窗口并给出非阻断提示，不能留下黑框或不可交互窗口。
+- 富文本命令必须作用于真实 marks/nodes，不能把 `<font>`、`<span>` 或 LaTeX 定界符作为可见正文保存。
+- 任何富文本命令都必须先排除已销毁的 Tiptap 实例。
+
+## 发布与当前状态
+
+- 正式交付只发布 NSIS 安装包和 `SHA256SUMS.txt`，不发布自解压 portable。
+- 打包 smoke 必须使用显式临时 `NOTE_SMOKE_USER_DATA`，不能只改 `APPDATA`。
+- 当前稳定版为 `2.4.1`；本文件不保存单次迭代流水账或已完成 TODO。
+- `design-qa.md` 与 QA 图片是版本验收证据，不是现役产品规则；当前行为以代码、测试、README 和 `docs/PRODUCT.md` 裁决。
