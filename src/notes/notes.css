@@ -883,6 +883,8 @@
 }
 
 .rich-note-editor-host {
+  --note-east-asian-font-family: "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+
   min-width: 0;
   min-height: 0;
   width: 100%;
@@ -923,6 +925,8 @@
 .rich-note-prosemirror h1,
 .rich-note-prosemirror h2,
 .rich-note-prosemirror h3 {
+  --note-east-asian-font-family: "Songti SC", SimSun, serif;
+
   margin: 0;
   padding: 10px 0 5px;
   color: #292622;

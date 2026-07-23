@@ -26,6 +26,8 @@
 
 可编辑真源是经过 allowlist 校验的 Tiptap/ProseMirror JSON。每次保存同时派生干净 Markdown 和纯文本，分别用于导出、旧数据兼容和搜索。字体、字号、下划线、行距等视觉元数据不会污染 Markdown。
 
+字体按 Word 的字符系统思路渲染：Times New Roman 只用于英文、数字和西文符号，中文继续继承正文或标题原有的东亚字体。
+
 工具栏保留常见格式，低频格式收进弹层，并允许整体收起。粘贴只保留 Note 支持的结构；右键可选择纯文本粘贴。数学表达式保存为 `inlineMath`/`blockMath` 节点，由本地 KaTeX 渲染，失败时保留 LaTeX 源码而不清空正文。
 
 ## 自适应窗口

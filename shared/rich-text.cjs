@@ -33,6 +33,7 @@ const NOTE_FONT_VALUES = new Set(["songti", "kaiti", "simhei", "times-new-roman"
 const NOTE_SIZE_SEQUENCE = Object.freeze(["12", "14", "16", "20", "24"]);
 const NOTE_SIZE_VALUES = new Set(NOTE_SIZE_SEQUENCE);
 const NOTE_FONT_FAMILIES = new Set(["SimSun", "KaiTi", "SimHei", "Times New Roman", "Cascadia Code"]);
+const NOTE_TIMES_NEW_ROMAN_CSS = '"Times New Roman", var(--note-east-asian-font-family)';
 const NOTE_FONT_SIZES = new Set(["12px", "14px", "16px", "20px", "24px"]);
 const NOTE_LINE_HEIGHTS = new Set(["1", "1.15", "1.5", "1.72", "2", "2.5", "3"]);
 const BLOCK_NODE_TYPES = new Set(["paragraph", "heading", "blockquote", "bulletList", "orderedList", "taskList", "codeBlock", "horizontalRule", "image", "blockMath"]);
@@ -57,6 +58,11 @@ function stepNoteSize(value, direction, block = "paragraph") {
   if (!delta) return null;
   const nextIndex = Math.max(0, Math.min(NOTE_SIZE_SEQUENCE.length - 1, index + delta));
   return nextIndex === index ? null : NOTE_SIZE_SEQUENCE[nextIndex];
+}
+
+function renderNoteFontFamily(value) {
+  const fontFamily = String(value || "").trim();
+  return fontFamily === "Times New Roman" ? NOTE_TIMES_NEW_ROMAN_CSS : fontFamily;
 }
 
 function emptyRichBody() {
@@ -438,6 +444,7 @@ module.exports = {
   migrateMathInRichBody,
   normalizeRichBody,
   plainTextFromRichBody,
+  renderNoteFontFamily,
   stepNoteSize,
   stripOwnFormatMarkers,
 };

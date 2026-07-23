@@ -113,6 +113,14 @@ async function waitForValue(read, description) {
   throw new Error(`Timed out waiting for ${description}`);
 }
 
+async function platformFontsForSelector(send, selector) {
+  const { root } = await send("DOM.getDocument", { depth: -1 });
+  const { nodeId } = await send("DOM.querySelector", { nodeId: root.nodeId, selector });
+  if (!nodeId) throw new Error(`Could not find font inspection target: ${selector}`);
+  const { fonts } = await send("CSS.getPlatformFontsForNode", { nodeId });
+  return fonts;
+}
+
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "note-desktop-smoke-"));
 const appData = path.join(temporaryRoot, "Roaming");
 const localAppData = path.join(temporaryRoot, "Local");
@@ -162,6 +170,8 @@ try {
   const target = await waitForTarget(port, child);
   cdp = await connectCdp(target.webSocketDebuggerUrl);
   await cdp.send("Runtime.enable");
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
 
   const todo = await waitFor(
     cdp.send,
@@ -243,7 +253,12 @@ try {
   await evaluate(cdp.send, `(() => {
     const editor = document.querySelector('.rich-note-prosemirror');
     editor.focus();
-    document.execCommand('insertText', false, 'Packaged Rich Text');
+    document.execCommand('insertText', false, '中文 Packaged Rich Text 123');
+  })()`);
+  const basePlatformFonts = await platformFontsForSelector(cdp.send, ".rich-note-prosemirror p");
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    editor.focus();
     document.execCommand('selectAll');
     document.querySelector('button[aria-label="更多格式"]')?.click();
   })()`);
@@ -262,13 +277,28 @@ try {
       return {
         text: editor.textContent,
         font: getComputedStyle(styled).fontFamily,
+        eastAsianFont: getComputedStyle(styled).getPropertyValue('--note-east-asian-font-family').trim(),
         rawMarkerVisible: /<font\\s+data-note-font/i.test(editor.textContent),
       };
     })()`,
     "a real Times New Roman mark",
   );
-  if (richEditor.rawMarkerVisible || !richEditor.font.includes("Times New Roman")) {
+  if (
+    richEditor.rawMarkerVisible
+    || !richEditor.font.includes("Times New Roman")
+    || !/(?:Microsoft YaHei|PingFang SC)/.test(richEditor.eastAsianFont)
+  ) {
     throw new Error(`Unexpected rich editor state: ${JSON.stringify(richEditor)}`);
+  }
+  const platformFonts = await platformFontsForSelector(
+    cdp.send,
+    '.rich-note-prosemirror [style*="Times New Roman"]',
+  );
+  const timesFont = platformFonts.find((font) => /Times New Roman/i.test(font.familyName) && font.glyphCount > 0);
+  const eastAsianFont = platformFonts.find((font) => !/Times New Roman/i.test(font.familyName) && font.glyphCount > 0);
+  const baseEastAsianFont = basePlatformFonts.find((font) => font.glyphCount === 2);
+  if (!timesFont || !eastAsianFont || eastAsianFont.familyName !== baseEastAsianFont?.familyName) {
+    throw new Error(`Times New Roman did not preserve a separate East Asian font: ${JSON.stringify(platformFonts)}`);
   }
 
   await evaluate(cdp.send, `(() => {
@@ -373,6 +403,8 @@ try {
     legacyMigration,
     legacyPersistence,
     richEditor,
+    basePlatformFonts,
+    platformFonts,
     increasedFontSize,
     decreasedFontSize,
     lineHeightEditor,
