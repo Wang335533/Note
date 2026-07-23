@@ -16,6 +16,7 @@ import {
   migrateRichBodyMath,
   migratePastedMathSlice,
   richBodyFromLegacyMarkdown,
+  setFontFamilyForEditor,
   stepFontSizeForEditor,
 } from "./rich-text.js";
 
@@ -498,7 +499,10 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       else if (kind === "underline") chain = chain.toggleUnderline();
       else if (kind === "strike") chain = chain.toggleStrike();
       else if (kind === "code") chain = chain.toggleCode();
-      else if (kind === "font") chain = value ? chain.setFontFamily(fontFamilyFor(value)) : chain.unsetFontFamily().removeEmptyTextStyle();
+      else if (kind === "font") {
+        if (value) return setFontFamilyForEditor(editor, fontFamilyFor(value));
+        chain = chain.unsetFontFamily().removeEmptyTextStyle();
+      }
       else if (kind === "size") chain = value ? chain.setFontSize(fontSizeFor(value)) : chain.unsetFontSize().removeEmptyTextStyle();
       else return false;
       return chain.run();

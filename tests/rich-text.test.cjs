@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   emptyRichBody,
   isRichBody,
+  isWesternFontCharacter,
   markdownFromRichBody,
   migrateMathInRichBody,
   plainTextFromRichBody,
@@ -66,6 +67,12 @@ test("Times New Roman uses the Latin slot and keeps the contextual East Asian fo
   );
   assert.equal(renderNoteFontFamily("SimSun"), "SimSun");
   assert.equal(renderNoteFontFamily(""), "");
+  assert.equal(isWesternFontCharacter("A"), true);
+  assert.equal(isWesternFontCharacter("9"), true);
+  assert.equal(isWesternFontCharacter("é"), true);
+  assert.equal(isWesternFontCharacter("中"), false);
+  assert.equal(isWesternFontCharacter("。"), false);
+  assert.equal(isWesternFontCharacter("🙂"), false);
 });
 
 test("rich documents validate with a strict node and mark allowlist", () => {

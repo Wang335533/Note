@@ -16,6 +16,7 @@ import { attachmentIdFromUrl } from "desktop-note/library-files";
 
 const {
   emptyRichBody,
+  isWesternFontCharacter,
   migrateMathInRichBody,
   normalizeRichBody,
   renderNoteFontFamily,
@@ -195,6 +196,78 @@ const NoteFontFamily = FontFamily.extend({
     }));
   },
 });
+
+function replaceTextStyleFont(transaction, markType, from, to, currentAttributes, fontFamily) {
+  const currentFont = currentAttributes.fontFamily || null;
+  const nextFont = fontFamily || null;
+  if (currentFont === nextFont) return false;
+  const nextAttributes = { ...currentAttributes, fontFamily: nextFont };
+  transaction.removeMark(from, to, markType);
+  if (Object.values(nextAttributes).some((value) => value !== null && value !== undefined && value !== "")) {
+    transaction.addMark(from, to, markType.create(nextAttributes));
+  }
+  return true;
+}
+
+export function setFontFamilyForEditor(editor, fontFamily) {
+  if (!editor || editor.isDestroyed || !fontFamily) return false;
+  editor.commands.focus();
+  const { state } = editor;
+  const { from, to, empty } = state.selection;
+  if (empty || fontFamily !== "Times New Roman") {
+    return editor.chain().setFontFamily(fontFamily).run();
+  }
+
+  const markType = state.schema.marks.textStyle;
+  if (!markType) return false;
+  const transaction = state.tr;
+  let changed = false;
+  state.doc.nodesBetween(from, to, (node, position) => {
+    if (!node.isText || !node.text) return;
+    const selectedFrom = Math.max(from, position);
+    const selectedTo = Math.min(to, position + node.nodeSize);
+    if (selectedFrom >= selectedTo) return;
+    const selectedText = node.text.slice(selectedFrom - position, selectedTo - position);
+    const textStyleMark = node.marks.find((mark) => mark.type === markType);
+    const currentAttributes = textStyleMark?.attrs || {};
+    let offset = 0;
+    while (offset < selectedText.length) {
+      const character = String.fromCodePoint(selectedText.codePointAt(offset));
+      const western = isWesternFontCharacter(character);
+      let runEnd = offset + character.length;
+      while (runEnd < selectedText.length) {
+        const nextCharacter = String.fromCodePoint(selectedText.codePointAt(runEnd));
+        if (isWesternFontCharacter(nextCharacter) !== western) break;
+        runEnd += nextCharacter.length;
+      }
+      const runFrom = selectedFrom + offset;
+      const runTo = selectedFrom + runEnd;
+      if (western) {
+        changed = replaceTextStyleFont(
+          transaction,
+          markType,
+          runFrom,
+          runTo,
+          currentAttributes,
+          fontFamily,
+        ) || changed;
+      } else if (currentAttributes.fontFamily === "Times New Roman") {
+        changed = replaceTextStyleFont(
+          transaction,
+          markType,
+          runFrom,
+          runTo,
+          currentAttributes,
+          null,
+        ) || changed;
+      }
+      offset = runEnd;
+    }
+  });
+  if (!changed) return false;
+  editor.view.dispatch(transaction.scrollIntoView());
+  return true;
+}
 
 function replaceMathInput({ state, range, latex, type, trailingSpace = false }) {
   const value = String(latex || "").trim();
