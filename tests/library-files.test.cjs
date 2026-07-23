@@ -77,8 +77,9 @@ test("library export preserves notebook structure, unique note names, and relati
   assert.equal(plan.notes[0].assets[0].relativePath, "研究 项目/识别策略.assets/image-one.png");
 });
 
-test("browser and desktop library helpers stay behaviorally aligned", async () => {
+test("browser and desktop consumers use the same library helpers", async () => {
   const browserHelpers = await import("../shared/library-files.mjs");
+  assert.equal(browserHelpers.createLibraryExportPlan, createLibraryExportPlan);
   assert.equal(browserHelpers.safeFileSegment("../研究:设计?. "), safeFileSegment("../研究:设计?. "));
   assert.equal(browserHelpers.deriveImportedTitle("会议纪要.md", "没有一级标题"), deriveImportedTitle("会议纪要.md", "没有一级标题"));
   assert.equal(browserHelpers.noteAssetUrl("asset-1"), noteAssetUrl("asset-1"));

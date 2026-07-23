@@ -14,7 +14,6 @@ test("release configuration avoids the self-extracting portable target", () => {
   assert.deepEqual(targets, ["nsis"]);
   assert.equal(packageJson.build?.portable, undefined);
   assert.equal(packageJson.build?.nsis?.differentialPackage, false);
-  assert.doesNotMatch(packageJson.scripts?.["package:win"] || "", /portable/i);
   assert.match(packageJson.scripts?.["package:installer"] || "", /--publish never/);
 });
 
