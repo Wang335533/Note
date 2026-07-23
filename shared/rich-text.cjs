@@ -34,6 +34,7 @@ const NOTE_SIZE_SEQUENCE = Object.freeze(["12", "14", "16", "20", "24"]);
 const NOTE_SIZE_VALUES = new Set(NOTE_SIZE_SEQUENCE);
 const NOTE_FONT_FAMILIES = new Set(["SimSun", "KaiTi", "SimHei", "Times New Roman", "Cascadia Code"]);
 const NOTE_TIMES_NEW_ROMAN_CSS = '"Times New Roman", var(--note-east-asian-font-family)';
+const WESTERN_FONT_CHARACTER = /[\u0020-\u007e\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Number}]/u;
 const NOTE_FONT_SIZES = new Set(["12px", "14px", "16px", "20px", "24px"]);
 const NOTE_LINE_HEIGHTS = new Set(["1", "1.15", "1.5", "1.72", "2", "2.5", "3"]);
 const BLOCK_NODE_TYPES = new Set(["paragraph", "heading", "blockquote", "bulletList", "orderedList", "taskList", "codeBlock", "horizontalRule", "image", "blockMath"]);
@@ -63,6 +64,11 @@ function stepNoteSize(value, direction, block = "paragraph") {
 function renderNoteFontFamily(value) {
   const fontFamily = String(value || "").trim();
   return fontFamily === "Times New Roman" ? NOTE_TIMES_NEW_ROMAN_CSS : fontFamily;
+}
+
+function isWesternFontCharacter(value) {
+  const [character] = String(value || "");
+  return Boolean(character && WESTERN_FONT_CHARACTER.test(character));
 }
 
 function emptyRichBody() {
@@ -444,6 +450,7 @@ module.exports = {
   migrateMathInRichBody,
   normalizeRichBody,
   plainTextFromRichBody,
+  isWesternFontCharacter,
   renderNoteFontFamily,
   stepNoteSize,
   stripOwnFormatMarkers,

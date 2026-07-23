@@ -254,13 +254,34 @@ try {
     const editor = document.querySelector('.rich-note-prosemirror');
     editor.focus();
     document.execCommand('insertText', false, '中文 Packaged Rich Text 123');
+    const text = editor.querySelector('p')?.firstChild;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 2);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.querySelector('button[aria-label="更多格式"]')?.click();
   })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.more-format-popover select'))`, "the rich formatting menu");
+  await evaluate(cdp.send, `(() => {
+    const font = document.querySelector('.more-format-popover select');
+    font.value = 'kaiti';
+    font.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await waitFor(
+    cdp.send,
+    `document.querySelector('.rich-note-prosemirror [style*="KaiTi"]')?.textContent === '中文'`,
+    "the explicit Chinese font",
+  );
   const basePlatformFonts = await platformFontsForSelector(cdp.send, ".rich-note-prosemirror p");
   await evaluate(cdp.send, `(() => {
     const editor = document.querySelector('.rich-note-prosemirror');
     editor.focus();
     document.execCommand('selectAll');
-    document.querySelector('button[aria-label="更多格式"]')?.click();
+    if (!document.querySelector('.more-format-popover')) {
+      document.querySelector('button[aria-label="更多格式"]')?.click();
+    }
   })()`);
   await waitFor(cdp.send, `Boolean(document.querySelector('.more-format-popover select'))`, "the rich formatting menu");
   await evaluate(cdp.send, `(() => {
@@ -272,12 +293,15 @@ try {
     cdp.send,
     `(() => {
       const editor = document.querySelector('.rich-note-prosemirror');
-      const styled = editor?.querySelector('[style*="Times New Roman"]');
-      if (!editor || !styled) return null;
+      const western = editor?.querySelector('[style*="Times New Roman"]');
+      const eastAsian = editor?.querySelector('[style*="KaiTi"]');
+      if (!editor || !western || !eastAsian) return null;
       return {
         text: editor.textContent,
-        font: getComputedStyle(styled).fontFamily,
-        eastAsianFont: getComputedStyle(styled).getPropertyValue('--note-east-asian-font-family').trim(),
+        westernText: western.textContent,
+        westernFont: getComputedStyle(western).fontFamily,
+        eastAsianText: eastAsian.textContent,
+        eastAsianFont: getComputedStyle(eastAsian).fontFamily,
         rawMarkerVisible: /<font\\s+data-note-font/i.test(editor.textContent),
       };
     })()`,
@@ -285,17 +309,19 @@ try {
   );
   if (
     richEditor.rawMarkerVisible
-    || !richEditor.font.includes("Times New Roman")
-    || !/(?:Microsoft YaHei|PingFang SC)/.test(richEditor.eastAsianFont)
+    || !richEditor.westernFont.includes("Times New Roman")
+    || !richEditor.eastAsianFont.includes("KaiTi")
+    || /\p{Script=Han}/u.test(richEditor.westernText)
+    || richEditor.eastAsianText !== "中文"
   ) {
     throw new Error(`Unexpected rich editor state: ${JSON.stringify(richEditor)}`);
   }
   const platformFonts = await platformFontsForSelector(
     cdp.send,
-    '.rich-note-prosemirror [style*="Times New Roman"]',
+    ".rich-note-prosemirror p",
   );
   const timesFont = platformFonts.find((font) => /Times New Roman/i.test(font.familyName) && font.glyphCount > 0);
-  const eastAsianFont = platformFonts.find((font) => !/Times New Roman/i.test(font.familyName) && font.glyphCount > 0);
+  const eastAsianFont = platformFonts.find((font) => /KaiTi/i.test(font.familyName) && font.glyphCount > 0);
   const baseEastAsianFont = basePlatformFonts.find((font) => font.glyphCount === 2);
   if (!timesFont || !eastAsianFont || eastAsianFont.familyName !== baseEastAsianFont?.familyName) {
     throw new Error(`Times New Roman did not preserve a separate East Asian font: ${JSON.stringify(platformFonts)}`);
