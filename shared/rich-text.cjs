@@ -16,6 +16,10 @@ const RICH_NODE_TYPES = new Set([
   "image",
   "inlineMath",
   "blockMath",
+  "table",
+  "tableRow",
+  "tableHeader",
+  "tableCell",
   "text",
 ]);
 
@@ -37,11 +41,15 @@ const NOTE_TIMES_NEW_ROMAN_CSS = '"Times New Roman", var(--note-east-asian-font-
 const WESTERN_FONT_CHARACTER = /[\u0020-\u007e\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Number}]/u;
 const NOTE_FONT_SIZES = new Set(["12px", "14px", "16px", "20px", "24px"]);
 const NOTE_LINE_HEIGHTS = new Set(["1", "1.15", "1.5", "1.72", "2", "2.5", "3"]);
-const BLOCK_NODE_TYPES = new Set(["paragraph", "heading", "blockquote", "bulletList", "orderedList", "taskList", "codeBlock", "horizontalRule", "image", "blockMath"]);
+const BLOCK_NODE_TYPES = new Set(["paragraph", "heading", "blockquote", "bulletList", "orderedList", "taskList", "codeBlock", "horizontalRule", "image", "blockMath", "table"]);
 const INLINE_NODE_TYPES = new Set(["text", "hardBreak", "inlineMath"]);
 const MAX_RICH_NODES = 50000;
 const MAX_RICH_TEXT = 5 * 1024 * 1024;
 const MAX_LATEX_TEXT = 128 * 1024;
+const MAX_TABLE_ROWS = 200;
+const MAX_TABLE_COLUMNS = 30;
+const MIN_TABLE_COLUMN_WIDTH = 40;
+const MAX_TABLE_COLUMN_WIDTH = 2000;
 
 function defaultNoteSizeForBlock(block) {
   if (block === "heading-1") return "24";
@@ -94,6 +102,14 @@ function hasOnlyKeys(value, keys) {
   return value === undefined || (hasSafeAttributes(value) && Object.keys(value).every((key) => keys.includes(key)));
 }
 
+function hasOnlyAttributeNames(value, keys) {
+  return value === undefined
+    || (Boolean(value)
+      && typeof value === "object"
+      && !Array.isArray(value)
+      && Object.keys(value).every((key) => keys.includes(key)));
+}
+
 function isSafeStoredUrl(value, { image = false } = {}) {
   if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f\s]/.test(value)) return false;
   if (image && /^note-asset:\/\/local\/[A-Za-z0-9._-]+$/i.test(value)) return true;
@@ -127,6 +143,21 @@ function validNodeAttributes(node) {
     return ["alt", "title"].every((key) => attrs[key] === undefined || attrs[key] === null || typeof attrs[key] === "string")
       && ["width", "height"].every((key) => attrs[key] === undefined || attrs[key] === null || (Number.isFinite(attrs[key]) && attrs[key] > 0));
   }
+  if (["tableCell", "tableHeader"].includes(node.type)) {
+    if (!hasOnlyAttributeNames(attrs, ["colspan", "rowspan", "colwidth", "align"])) return false;
+    const colspan = attrs?.colspan ?? 1;
+    const rowspan = attrs?.rowspan ?? 1;
+    if (!Number.isInteger(colspan) || colspan < 1 || colspan > MAX_TABLE_COLUMNS) return false;
+    if (!Number.isInteger(rowspan) || rowspan < 1 || rowspan > MAX_TABLE_ROWS) return false;
+    if (attrs?.align !== undefined && attrs.align !== null && !["left", "center", "right"].includes(attrs.align)) return false;
+    if (attrs?.colwidth !== undefined && attrs.colwidth !== null) {
+      if (!Array.isArray(attrs.colwidth) || attrs.colwidth.length !== colspan) return false;
+      if (!attrs.colwidth.every((width) => Number.isInteger(width)
+        && width >= MIN_TABLE_COLUMN_WIDTH
+        && width <= MAX_TABLE_COLUMN_WIDTH)) return false;
+    }
+    return true;
+  }
   return hasOnlyKeys(attrs, []);
 }
 
@@ -152,8 +183,48 @@ function validChildType(parentType, childType) {
   if (parentType === "bulletList" || parentType === "orderedList") return childType === "listItem";
   if (parentType === "taskList") return childType === "taskItem";
   if (parentType === "listItem" || parentType === "taskItem") return BLOCK_NODE_TYPES.has(childType);
+  if (parentType === "table") return childType === "tableRow";
+  if (parentType === "tableRow") return ["tableCell", "tableHeader"].includes(childType);
+  if (parentType === "tableCell" || parentType === "tableHeader") return childType === "paragraph";
   if (parentType === "codeBlock") return childType === "text";
   return false;
+}
+
+function validTableStructure(node) {
+  const rows = node.content;
+  if (!Array.isArray(rows) || !rows.length || rows.length > MAX_TABLE_ROWS) return false;
+  const occupied = Array.from({ length: rows.length }, () => Array(MAX_TABLE_COLUMNS).fill(false));
+  let tableWidth = null;
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (row?.type !== "tableRow" || !Array.isArray(row.content) || !row.content.length) return false;
+    let columnIndex = 0;
+    for (const cell of row.content) {
+      while (columnIndex < MAX_TABLE_COLUMNS && occupied[rowIndex][columnIndex]) columnIndex += 1;
+      const colspan = cell?.attrs?.colspan ?? 1;
+      const rowspan = cell?.attrs?.rowspan ?? 1;
+      if (!Number.isInteger(colspan) || !Number.isInteger(rowspan)
+        || colspan < 1 || rowspan < 1
+        || columnIndex + colspan > MAX_TABLE_COLUMNS
+        || rowIndex + rowspan > rows.length) return false;
+      for (let rowOffset = 0; rowOffset < rowspan; rowOffset += 1) {
+        for (let columnOffset = 0; columnOffset < colspan; columnOffset += 1) {
+          const targetRow = rowIndex + rowOffset;
+          const targetColumn = columnIndex + columnOffset;
+          if (occupied[targetRow][targetColumn]) return false;
+          occupied[targetRow][targetColumn] = true;
+        }
+      }
+      columnIndex += colspan;
+    }
+
+    const rowWidth = occupied[rowIndex].lastIndexOf(true) + 1;
+    if (rowWidth < 1) return false;
+    if (tableWidth === null) tableWidth = rowWidth;
+    if (rowWidth !== tableWidth || occupied[rowIndex].slice(0, tableWidth).some((filled) => !filled)) return false;
+  }
+  return true;
 }
 
 function validateRichNode(node, budget, depth = 0, parentType = null) {
@@ -163,6 +234,12 @@ function validateRichNode(node, budget, depth = 0, parentType = null) {
   budget.nodes += 1;
   if (budget.nodes > MAX_RICH_NODES) return false;
   if (!validNodeAttributes(node)) return false;
+  if (node.type === "table" && !validTableStructure(node)) return false;
+  if (node.type === "tableRow") {
+    if (!Array.isArray(node.content) || !node.content.length) return false;
+    const logicalColumns = node.content.reduce((count, cell) => count + (cell?.attrs?.colspan ?? 1), 0);
+    if (logicalColumns < 1 || logicalColumns > MAX_TABLE_COLUMNS) return false;
+  }
 
   if (node.type === "text") {
     if (typeof node.text !== "string") return false;
@@ -191,7 +268,7 @@ function validateRichNode(node, budget, depth = 0, parentType = null) {
     if (!Array.isArray(node.content)) return false;
     if (!node.content.every((child) => validateRichNode(child, budget, depth + 1, node.type))) return false;
   }
-  if (["doc", "blockquote", "bulletList", "orderedList", "taskList", "listItem", "taskItem"].includes(node.type)
+  if (["doc", "blockquote", "bulletList", "orderedList", "taskList", "listItem", "taskItem", "table", "tableRow", "tableCell", "tableHeader"].includes(node.type)
     && (!Array.isArray(node.content) || !node.content.length)) return false;
   if (["listItem", "taskItem"].includes(node.type) && node.content[0]?.type !== "paragraph") return false;
   if (["hardBreak", "horizontalRule", "image", "inlineMath", "blockMath"].includes(node.type) && node.content !== undefined) return false;
@@ -372,6 +449,50 @@ function inlineContent(node) {
   return (node?.content || []).map(inlineMarkdown).join("");
 }
 
+function tableCellMarkdown(node) {
+  const value = (node?.content || []).map((child) => {
+    if (child.type === "paragraph") return inlineContent(child);
+    return blockMarkdown(child);
+  }).filter((part) => part !== "").join("<br>");
+  return value.replace(/\|/g, "\\|").replace(/[ \t]*\r?\n/g, "<br>").trim();
+}
+
+function tableRows(node) {
+  return (node?.content || []).filter((row) => row.type === "tableRow").map((row) => {
+    const cells = [];
+    for (const cell of row.content || []) {
+      cells.push({
+        text: tableCellMarkdown(cell),
+        align: ["left", "center", "right"].includes(cell.attrs?.align) ? cell.attrs.align : null,
+        header: cell.type === "tableHeader",
+      });
+      const colspan = Math.max(1, Number(cell.attrs?.colspan) || 1);
+      for (let index = 1; index < colspan; index += 1) cells.push({ text: "", align: cell.attrs?.align || null, header: false });
+    }
+    return cells;
+  });
+}
+
+function tableMarkdown(node) {
+  const rows = tableRows(node);
+  if (!rows.length) return "";
+  const columnCount = Math.max(1, ...rows.map((row) => row.length));
+  const padded = rows.map((row) => Array.from({ length: columnCount }, (_, index) => row[index] || {
+    text: "",
+    align: null,
+    header: false,
+  }));
+  const header = padded[0];
+  const delimiter = header.map((cell) => {
+    if (cell.align === "left") return ":---";
+    if (cell.align === "center") return ":---:";
+    if (cell.align === "right") return "---:";
+    return "---";
+  });
+  const renderRow = (row) => `| ${row.map((cell) => cell.text).join(" | ")} |`;
+  return [renderRow(header), renderRow(delimiter.map((text) => ({ text }))), ...padded.slice(1).map(renderRow)].join("\n");
+}
+
 function prefixLines(value, firstPrefix, restPrefix) {
   return String(value || "").split("\n").map((line, index) => `${index ? restPrefix : firstPrefix}${line}`).join("\n");
 }
@@ -388,6 +509,7 @@ function blockMarkdown(node, context = {}) {
   if (node.type === "horizontalRule") return "---";
   if (node.type === "image") return inlineMarkdown(node);
   if (node.type === "blockMath") return `$$\n${String(node.attrs?.latex || "").trim()}\n$$`;
+  if (node.type === "table") return tableMarkdown(node);
   if (node.type === "blockquote") {
     const content = (node.content || []).map((child) => blockMarkdown(child)).filter(Boolean).join("\n\n");
     return prefixLines(content, "> ", "> ");
@@ -425,12 +547,27 @@ function plainTextFromRichBody(value) {
   const richBody = normalizeRichBody(value);
   if (!richBody) return "";
   const parts = [];
+  const inlinePlainText = (node) => {
+    if (node.type === "text") return node.text || "";
+    if (node.type === "hardBreak") return "\n";
+    if (node.type === "inlineMath") return `$${String(node.attrs?.latex || "").trim()}$`;
+    return (node.content || []).map(inlinePlainText).join("");
+  };
   const visit = (node) => {
     if (node.type === "text") parts.push(node.text);
     else if (node.type === "image" && node.attrs?.alt) parts.push(String(node.attrs.alt));
     else if (node.type === "inlineMath") parts.push(`$${String(node.attrs?.latex || "").trim()}$`);
     else if (node.type === "blockMath") parts.push(`$$\n${String(node.attrs?.latex || "").trim()}\n$$\n`);
-    else {
+    else if (node.type === "table") {
+      for (const [rowIndex, row] of (node.content || []).entries()) {
+        for (const [cellIndex, cell] of (row.content || []).entries()) {
+          if (cellIndex) parts.push("\t");
+          parts.push((cell.content || []).map(inlinePlainText).join("\n"));
+        }
+        if (rowIndex < node.content.length - 1) parts.push("\n");
+      }
+      parts.push("\n");
+    } else {
       for (const child of node.content || []) visit(child);
       if (["paragraph", "heading", "blockquote", "listItem", "taskItem", "codeBlock"].includes(node.type)) parts.push("\n");
     }
@@ -443,6 +580,8 @@ module.exports = {
   NOTE_FONT_VALUES,
   NOTE_SIZE_SEQUENCE,
   NOTE_SIZE_VALUES,
+  MAX_TABLE_COLUMNS,
+  MAX_TABLE_ROWS,
   RICH_BODY_VERSION,
   emptyRichBody,
   isRichBody,

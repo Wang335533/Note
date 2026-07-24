@@ -49,6 +49,52 @@ const formattedDocument = {
   ],
 };
 
+const tableDocument = {
+  type: "doc",
+  content: [{
+    type: "table",
+    content: [
+      {
+        type: "tableRow",
+        content: [
+          {
+            type: "tableHeader",
+            attrs: { colspan: 1, rowspan: 1, colwidth: [160], align: "left" },
+            content: [{ type: "paragraph", content: [{ type: "text", text: "变量" }] }],
+          },
+          {
+            type: "tableHeader",
+            attrs: { colspan: 1, rowspan: 1, colwidth: null, align: "center" },
+            content: [{ type: "paragraph", content: [{ type: "text", text: "预期方向" }] }],
+          },
+        ],
+      },
+      {
+        type: "tableRow",
+        content: [
+          {
+            type: "tableCell",
+            attrs: { colspan: 1, rowspan: 1, colwidth: [160], align: "left" },
+            content: [{
+              type: "paragraph",
+              content: [
+                { type: "text", text: "Analyst | Coverage", marks: [{ type: "bold" }] },
+                { type: "hardBreak" },
+                { type: "inlineMath", attrs: { latex: "\\beta_1" } },
+              ],
+            }],
+          },
+          {
+            type: "tableCell",
+            attrs: { colspan: 1, rowspan: 1, colwidth: null, align: "center" },
+            content: [{ type: "paragraph", content: [{ type: "text", text: "负" }] }],
+          },
+        ],
+      },
+    ],
+  }],
+};
+
 test("Word-style font stepping follows the supported size scale and block defaults", () => {
   assert.equal(stepNoteSize("", "increase", "paragraph"), "16");
   assert.equal(stepNoteSize("", "decrease", "paragraph"), "12");
@@ -160,6 +206,41 @@ test("clean Markdown export keeps semantics and drops visual-only font metadata"
   assert.equal(markdown, "## **研究设计**\n\n- [x] 核对变量");
   assert.doesNotMatch(markdown, /font|span|Times New Roman|20px|<u>/i);
   assert.equal(plainTextFromRichBody(formattedDocument), "研究设计\n核对变量");
+});
+
+test("editable tables validate, export as GFM, and remain searchable", () => {
+  assert.equal(isRichBody(tableDocument), true);
+  assert.equal(
+    markdownFromRichBody(tableDocument),
+    "| 变量 | 预期方向 |\n| :--- | :---: |\n| **Analyst \\| Coverage**<br>$\\beta_1$ | 负 |",
+  );
+  assert.equal(plainTextFromRichBody(tableDocument), "变量\t预期方向\nAnalyst | Coverage\n$\\beta_1$\t负");
+});
+
+test("table validation rejects unsafe attributes, oversized rows, and unsupported cell blocks", () => {
+  const unsafeWidth = structuredClone(tableDocument);
+  unsafeWidth.content[0].content[0].content[0].attrs.colwidth = [99999];
+  assert.equal(isRichBody(unsafeWidth), false);
+
+  const unsupportedCellBlock = structuredClone(tableDocument);
+  unsupportedCellBlock.content[0].content[1].content[0].content = [{
+    type: "image",
+    attrs: { src: "https://example.com/image.png" },
+  }];
+  assert.equal(isRichBody(unsupportedCellBlock), false);
+
+  const oversized = structuredClone(tableDocument);
+  const prototype = oversized.content[0].content[1].content[0];
+  oversized.content[0].content[1].content = Array.from({ length: 31 }, () => structuredClone(prototype));
+  assert.equal(isRichBody(oversized), false);
+
+  const unevenRows = structuredClone(tableDocument);
+  unevenRows.content[0].content[1].content.pop();
+  assert.equal(isRichBody(unevenRows), false);
+
+  const danglingRowspan = structuredClone(tableDocument);
+  danglingRowspan.content[0].content[1].content[0].attrs.rowspan = 2;
+  assert.equal(isRichBody(danglingRowspan), false);
 });
 
 test("math nodes validate, remain searchable, and export as portable Markdown", () => {

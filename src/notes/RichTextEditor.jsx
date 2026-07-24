@@ -14,14 +14,32 @@ import {
   fontSizeFor,
   formatStateForEditor,
   migrateRichBodyMath,
+  migrateRichBodyTables,
   migratePastedMathSlice,
+  markdownTableInfo,
+  richBodyFromHtml,
   richBodyFromLegacyMarkdown,
   setFontFamilyForEditor,
   stepFontSizeForEditor,
 } from "./rich-text.js";
 
-const { markdownFromRichBody, plainTextFromRichBody } = richTextModule;
+const {
+  markdownFromRichBody,
+  MAX_TABLE_COLUMNS,
+  MAX_TABLE_ROWS,
+  plainTextFromRichBody,
+} = richTextModule;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const TABLE_COMMANDS = new Set([
+  "addRowBefore",
+  "addRowAfter",
+  "deleteRow",
+  "addColumnBefore",
+  "addColumnAfter",
+  "deleteColumn",
+  "toggleHeaderRow",
+  "deleteTable",
+]);
 const KATEX_PREVIEW_OPTIONS = Object.freeze({
   throwOnError: true,
   strict: "ignore",
@@ -236,8 +254,15 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
         migrated: true,
       };
     }
-    const mathMigration = migrateRichBodyMath(richBody);
-    return { content: mathMigration.richBody || richBody, migrated: mathMigration.changed };
+    const tableMigration = migrateRichBodyTables(richBody, {
+      resolveAssetUrl: (id) => noteApi.getAssetUrl?.(id) || "",
+    });
+    const tableContent = tableMigration.richBody || richBody;
+    const mathMigration = migrateRichBodyMath(tableContent);
+    return {
+      content: mathMigration.richBody || tableContent,
+      migrated: tableMigration.changed || mathMigration.changed,
+    };
   }, [noteId]);
   const migratedRef = useRef(preparedContent.migrated);
   const pendingMigrationSourceRef = useRef(preparedContent.migrated ? JSON.stringify(richBody) : null);
@@ -403,8 +428,30 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
         }
         const text = event.clipboardData?.getData("text/plain") || "";
         const html = event.clipboardData?.getData("text/html") || "";
-        if (!containsMathMarkup(text) || html.trim()) return false;
-        const content = richBodyFromLegacyMarkdown(text, { resolveAssetUrl: (id) => noteApi.getAssetUrl?.(id) || "" });
+        const options = { resolveAssetUrl: (id) => noteApi.getAssetUrl?.(id) || "" };
+        const hasHtmlTable = /<table(?:\s|>)/i.test(html);
+        if (hasHtmlTable) {
+          const content = richBodyFromHtml(html, options);
+          event.preventDefault();
+          if (!content?.content?.some((node) => node.type === "table")) {
+            const fallback = richBodyFromLegacyMarkdown(text, options);
+            editorRef.current?.chain().focus().insertContent(fallback.content || []).run();
+            callbacksRef.current.showToast?.("表格过大或包含暂不支持的内容，已保留为文本");
+            return true;
+          }
+          editorRef.current?.chain().focus().insertContent(content.content || []).run();
+          return true;
+        }
+        const tableInfo = markdownTableInfo(text);
+        if (tableInfo.oversized) {
+          event.preventDefault();
+          const fallback = richBodyFromLegacyMarkdown(text, options);
+          editorRef.current?.chain().focus().insertContent(fallback.content || []).run();
+          callbacksRef.current.showToast?.(`表格超过 ${tableInfo.maxRows} × ${tableInfo.maxColumns}，已保留为文本`);
+          return true;
+        }
+        if (!tableInfo.hasTable && !containsMathMarkup(text)) return false;
+        const content = richBodyFromLegacyMarkdown(text, options);
         event.preventDefault();
         editorRef.current?.chain().focus().insertContent(content.content || []).run();
         return true;
@@ -546,6 +593,31 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
     },
     openMathEditor() {
       return openNewMath();
+    },
+    insertTable(rows = 3, columns = 3) {
+      if (!editorIsReady(editor) || readOnly) return false;
+      const safeRows = Math.max(1, Math.min(8, Math.trunc(Number(rows) || 3)));
+      const safeColumns = Math.max(1, Math.min(10, Math.trunc(Number(columns) || 3)));
+      return editor.chain().focus().insertTable({
+        rows: safeRows,
+        cols: safeColumns,
+        withHeaderRow: true,
+      }).run();
+    },
+    applyTableCommand(command) {
+      if (!editorIsReady(editor) || readOnly || !TABLE_COMMANDS.has(command)) return false;
+      const tableState = formatStateForEditor(editor);
+      if (["addRowBefore", "addRowAfter"].includes(command) && tableState.tableRows >= MAX_TABLE_ROWS) {
+        callbacksRef.current.showToast?.(`单个表格最多 ${MAX_TABLE_ROWS} 行`);
+        return false;
+      }
+      if (["addColumnBefore", "addColumnAfter"].includes(command) && tableState.tableColumns >= MAX_TABLE_COLUMNS) {
+        callbacksRef.current.showToast?.(`单个表格最多 ${MAX_TABLE_COLUMNS} 列`);
+        return false;
+      }
+      const chain = editor.chain().focus();
+      const tableCommand = chain[command];
+      return typeof tableCommand === "function" ? tableCommand.call(chain).run() : false;
     },
     startFormatPainter() {
       if (!editorIsReady(editor) || readOnly) return false;
