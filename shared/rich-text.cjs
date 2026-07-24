@@ -41,6 +41,7 @@ const NOTE_TIMES_NEW_ROMAN_CSS = '"Times New Roman", var(--note-east-asian-font-
 const WESTERN_FONT_CHARACTER = /[\u0020-\u007e\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Number}]/u;
 const NOTE_FONT_SIZES = new Set(["12px", "14px", "16px", "20px", "24px"]);
 const NOTE_LINE_HEIGHTS = new Set(["1", "1.15", "1.5", "1.72", "2", "2.5", "3"]);
+const NOTE_TEXT_ALIGNS = new Set(["left", "center", "right", "justify"]);
 const BLOCK_NODE_TYPES = new Set(["paragraph", "heading", "blockquote", "bulletList", "orderedList", "taskList", "codeBlock", "horizontalRule", "image", "blockMath", "table"]);
 const INLINE_NODE_TYPES = new Set(["text", "hardBreak", "inlineMath"]);
 const MAX_RICH_NODES = 50000;
@@ -120,12 +121,15 @@ function isSafeStoredUrl(value, { image = false } = {}) {
 function validNodeAttributes(node) {
   const attrs = node.attrs;
   if (node.type === "paragraph") {
-    return hasOnlyKeys(attrs, ["lineHeight"])
-      && (attrs?.lineHeight === undefined || attrs.lineHeight === null || NOTE_LINE_HEIGHTS.has(attrs.lineHeight));
+    return hasOnlyKeys(attrs, ["lineHeight", "textAlign", "firstLineIndent"])
+      && (attrs?.lineHeight === undefined || attrs.lineHeight === null || NOTE_LINE_HEIGHTS.has(attrs.lineHeight))
+      && (attrs?.textAlign === undefined || attrs.textAlign === null || NOTE_TEXT_ALIGNS.has(attrs.textAlign))
+      && (attrs?.firstLineIndent === undefined || attrs.firstLineIndent === null || attrs.firstLineIndent === true);
   }
-  if (node.type === "heading") return hasOnlyKeys(attrs, ["level", "lineHeight"])
+  if (node.type === "heading") return hasOnlyKeys(attrs, ["level", "lineHeight", "textAlign"])
     && [1, 2, 3].includes(attrs?.level)
-    && (attrs?.lineHeight === undefined || attrs.lineHeight === null || NOTE_LINE_HEIGHTS.has(attrs.lineHeight));
+    && (attrs?.lineHeight === undefined || attrs.lineHeight === null || NOTE_LINE_HEIGHTS.has(attrs.lineHeight))
+    && (attrs?.textAlign === undefined || attrs.textAlign === null || NOTE_TEXT_ALIGNS.has(attrs.textAlign));
   if (node.type === "orderedList") return hasOnlyKeys(attrs, ["start", "type"])
     && (attrs?.start === undefined || (Number.isInteger(attrs.start) && attrs.start >= 1))
     && (attrs?.type === undefined || attrs.type === null || typeof attrs.type === "string");
@@ -234,6 +238,7 @@ function validateRichNode(node, budget, depth = 0, parentType = null) {
   budget.nodes += 1;
   if (budget.nodes > MAX_RICH_NODES) return false;
   if (!validNodeAttributes(node)) return false;
+  if (node.type === "paragraph" && node.attrs?.firstLineIndent === true && parentType !== "doc") return false;
   if (node.type === "table" && !validTableStructure(node)) return false;
   if (node.type === "tableRow") {
     if (!Array.isArray(node.content) || !node.content.length) return false;

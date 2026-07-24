@@ -22,6 +22,10 @@ const tableMarkdownFixture = [
   "| B. 信息不确定性 | 新分析框架是否更有价值 | Forecast Dispersion; Strategic Differentiation | 正 |",
   "| C. 专业处理 | 新信息能否被投资者吸收 | Participation Quantity; Research-intensive Participant Share | 正 |",
 ].join("\n");
+const wordLayoutHtml = [
+  '<p style="text-align: right; text-indent: 18pt; color: red; position: fixed" onclick="alert(1)">Word layout paragraph</p>',
+  '<blockquote><p style="text-align: center; text-indent: 18pt">Nested quote paragraph</p></blockquote>',
+].join("");
 
 async function reservePort() {
   const server = net.createServer();
@@ -440,6 +444,370 @@ try {
 
   await evaluate(cdp.send, `(() => {
     const editor = document.querySelector('.rich-note-prosemirror');
+    const paragraph = editor?.querySelector('p');
+    if (!editor || !paragraph) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    document.querySelector('button[aria-label^="段落对齐"]')?.click();
+    return true;
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.alignment-format-popover'))`, "the paragraph layout menu");
+  await evaluate(cdp.send, `document.querySelector('.alignment-format-grid button[aria-label^="居中"]')?.click()`);
+  const centeredParagraph = await waitFor(
+    cdp.send,
+    `(() => {
+      const paragraph = document.querySelector('.rich-note-prosemirror p');
+      return getComputedStyle(paragraph).textAlign === 'center'
+        ? { style: paragraph.getAttribute('style'), textAlign: getComputedStyle(paragraph).textAlign }
+        : null;
+    })()`,
+    "center paragraph alignment",
+  );
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const paragraph = editor?.querySelector('p');
+    if (!editor || !paragraph) return false;
+    editor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    window.__noteAlignmentShortcutSentinel = 'alive';
+    return true;
+  })()`);
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    modifiers: 2,
+    key: "r",
+    code: "KeyR",
+    windowsVirtualKeyCode: 82,
+    nativeVirtualKeyCode: 82,
+  });
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    modifiers: 2,
+    key: "r",
+    code: "KeyR",
+    windowsVirtualKeyCode: 82,
+    nativeVirtualKeyCode: 82,
+  });
+  await delay(100);
+  const shortcutRight = await evaluate(
+    cdp.send,
+    `getComputedStyle(document.querySelector('.rich-note-prosemirror p')).textAlign`,
+  );
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    modifiers: 2,
+    key: "l",
+    code: "KeyL",
+    windowsVirtualKeyCode: 76,
+    nativeVirtualKeyCode: 76,
+  });
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    modifiers: 2,
+    key: "l",
+    code: "KeyL",
+    windowsVirtualKeyCode: 76,
+    nativeVirtualKeyCode: 76,
+  });
+  await delay(100);
+  const alignmentShortcuts = await evaluate(cdp.send, `(() => {
+    const paragraph = document.querySelector('.rich-note-prosemirror p');
+    return {
+      right: ${JSON.stringify(shortcutRight)},
+      left: getComputedStyle(paragraph).textAlign,
+      leftStyle: paragraph.getAttribute('style'),
+      sentinel: window.__noteAlignmentShortcutSentinel,
+    };
+  })()`);
+  if (
+    alignmentShortcuts?.right !== "right"
+    || !["left", "start"].includes(alignmentShortcuts.left)
+    || alignmentShortcuts.sentinel !== "alive"
+    || /text-align/i.test(alignmentShortcuts.leftStyle || "")
+  ) {
+    throw new Error(`Unexpected Word-style alignment shortcuts: ${JSON.stringify(alignmentShortcuts)}`);
+  }
+
+  await evaluate(cdp.send, `document.querySelector('button[aria-label^="段落对齐"]')?.click()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.alignment-format-popover'))`, "the reopened paragraph layout menu");
+  await evaluate(cdp.send, `document.querySelector('.alignment-format-grid button[aria-label^="两端对齐"]')?.click()`);
+  const justifiedParagraph = await waitFor(
+    cdp.send,
+    `(() => {
+      const paragraph = document.querySelector('.rich-note-prosemirror p');
+      return getComputedStyle(paragraph).textAlign === 'justify'
+        ? {
+            textAlign: getComputedStyle(paragraph).textAlign,
+            textAlignLast: getComputedStyle(paragraph).textAlignLast,
+          }
+        : null;
+    })()`,
+    "justified paragraph alignment",
+  );
+  if (justifiedParagraph.textAlignLast !== "left") {
+    throw new Error(`The final justified line was not kept left: ${JSON.stringify(justifiedParagraph)}`);
+  }
+
+  await evaluate(cdp.send, `document.querySelector('button[aria-label^="段落对齐"]')?.click()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.alignment-format-popover'))`, "the paragraph layout menu for indentation");
+  await evaluate(cdp.send, `document.querySelector('.alignment-format-grid button[aria-label^="居中"]')?.click()`);
+  await evaluate(cdp.send, `document.querySelector('button[aria-label^="段落对齐"]')?.click()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.first-line-indent-toggle:not(:disabled)'))`, "the first-line indentation control");
+  await evaluate(cdp.send, `document.querySelector('.first-line-indent-toggle')?.click()`);
+  const indentedParagraph = await waitFor(
+    cdp.send,
+    `(() => {
+      const paragraph = document.querySelector('.rich-note-prosemirror p');
+      const style = paragraph?.getAttribute('style') || '';
+      return style.includes('text-indent: 2em')
+        ? { style, textIndent: getComputedStyle(paragraph).textIndent }
+        : null;
+    })()`,
+    "the fixed two-character first-line indentation",
+  );
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const paragraph = editor?.querySelector('p');
+    if (!editor || !paragraph) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    editor.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter',
+      code: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    }));
+    document.execCommand('insertText', false, 'Inherited indent');
+    return true;
+  })()`);
+  const inheritedIndent = await waitFor(
+    cdp.send,
+    `(() => {
+      const paragraphs = document.querySelectorAll('.rich-note-prosemirror > p');
+      const paragraph = [...paragraphs].find((item) => item.textContent.includes('Inherited indent'));
+      if (!paragraph || !String(paragraph.getAttribute('style')).includes('text-indent: 2em')) return null;
+      return {
+        count: paragraphs.length,
+        textIndent: getComputedStyle(paragraph).textIndent,
+        textAlign: getComputedStyle(paragraph).textAlign,
+      };
+    })()`,
+    "first-line indentation inherited on Enter",
+  );
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const paragraph = [...editor.querySelectorAll(':scope > p')].find((item) => item.textContent.includes('Inherited indent'));
+    if (!paragraph) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    editor.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Backspace',
+      code: 'Backspace',
+      bubbles: true,
+      cancelable: true,
+    }));
+    return true;
+  })()`);
+  const removedIndentBeforeMerge = await waitFor(
+    cdp.send,
+    `(() => {
+      const paragraphs = document.querySelectorAll('.rich-note-prosemirror > p');
+      const paragraph = [...paragraphs].find((item) => item.textContent.includes('Inherited indent'));
+      if (!paragraph || String(paragraph.getAttribute('style')).includes('text-indent')) return null;
+      return {
+        count: paragraphs.length,
+        text: paragraph.textContent,
+        firstStillIndented: String(paragraphs[0]?.getAttribute('style')).includes('text-indent: 2em'),
+      };
+    })()`,
+    "Backspace to remove indentation before merging paragraphs",
+  );
+  if (removedIndentBeforeMerge.count < 2 || !removedIndentBeforeMerge.firstStillIndented) {
+    throw new Error(`First Backspace merged or damaged another paragraph: ${JSON.stringify(removedIndentBeforeMerge)}`);
+  }
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const paragraph = [...editor.querySelectorAll(':scope > p')].find((item) => item.textContent.includes('Inherited indent'));
+    if (!paragraph) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    editor.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter',
+      code: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    }));
+    const clipboard = new DataTransfer();
+    clipboard.setData('text/plain', 'Word layout paragraph\\nNested quote paragraph');
+    clipboard.setData('text/html', ${JSON.stringify(wordLayoutHtml)});
+    editor.dispatchEvent(new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: clipboard,
+    }));
+    return true;
+  })()`);
+  const wordLayoutPaste = await waitFor(
+    cdp.send,
+    `(() => {
+      const editor = document.querySelector('.rich-note-prosemirror');
+      const paragraph = [...editor.querySelectorAll(':scope > p')].find((item) => item.textContent.includes('Word layout paragraph'));
+      const nested = [...editor.querySelectorAll('blockquote p')].find((item) => item.textContent.includes('Nested quote paragraph'));
+      if (!paragraph || !nested) return null;
+      return {
+        textAlign: getComputedStyle(paragraph).textAlign,
+        textIndent: getComputedStyle(paragraph).textIndent,
+        style: paragraph.getAttribute('style'),
+        nestedAlign: getComputedStyle(nested).textAlign,
+        nestedStyle: nested.getAttribute('style'),
+        unsafeHandler: paragraph.hasAttribute('onclick'),
+        unsafePosition: getComputedStyle(paragraph).position,
+        unsafeColor: paragraph.style.color,
+      };
+    })()`,
+    "safe Word paragraph layout paste",
+  );
+  if (
+    wordLayoutPaste.textAlign !== "right"
+    || wordLayoutPaste.textIndent === "0px"
+    || wordLayoutPaste.nestedAlign !== "center"
+    || /text-indent/i.test(wordLayoutPaste.nestedStyle || "")
+    || wordLayoutPaste.unsafeHandler
+    || wordLayoutPaste.unsafePosition === "fixed"
+    || wordLayoutPaste.unsafeColor
+  ) {
+    throw new Error(`Unexpected Word layout paste: ${JSON.stringify(wordLayoutPaste)}`);
+  }
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const source = editor?.querySelector(':scope > p');
+    if (!editor || !source) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(source);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    document.querySelector('button[aria-label="更多格式"]')?.click();
+    return true;
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.more-format-popover'))`, "format painter source menu");
+  await evaluate(cdp.send, `document.querySelector('button[aria-label^="格式刷"]')?.click()`);
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const target = [...editor.querySelectorAll(':scope > p')].find((item) => item.textContent.includes('Word layout paragraph'));
+    if (!target) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    return true;
+  })()`);
+  const painterLayout = await waitFor(
+    cdp.send,
+    `(() => {
+      const target = [...document.querySelectorAll('.rich-note-prosemirror > p')]
+        .find((item) => item.textContent.includes('Word layout paragraph'));
+      if (!target) return null;
+      const style = target.getAttribute('style') || '';
+      return getComputedStyle(target).textAlign === 'center' && style.includes('text-indent: 2em')
+        ? { textAlign: getComputedStyle(target).textAlign, style }
+        : null;
+    })()`,
+    "format painter paragraph layout",
+  );
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const target = [...editor.querySelectorAll(':scope > p')].find((item) => item.textContent.includes('Word layout paragraph'));
+    if (!target) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    document.querySelector('button[aria-label="更多格式"]')?.click();
+    return true;
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.more-format-popover'))`, "clear formatting menu");
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="清除所选格式"]')?.click()`);
+  const clearedLayout = await waitFor(
+    cdp.send,
+    `(() => {
+      const target = [...document.querySelectorAll('.rich-note-prosemirror > p')]
+        .find((item) => item.textContent.includes('Word layout paragraph'));
+      if (!target) return null;
+      const style = target.getAttribute('style') || '';
+      return ['left', 'start'].includes(getComputedStyle(target).textAlign) && !/text-align|text-indent/i.test(style)
+        ? { textAlign: getComputedStyle(target).textAlign, style }
+        : null;
+    })()`,
+    "clear formatting paragraph layout reset",
+  );
+
+  const paragraphLayoutPersistence = await waitForValue(async () => {
+    const persisted = JSON.parse(await fs.readFile(smokeStatePath, "utf8"));
+    const note = persisted.notes?.[richNoteId];
+    const firstParagraph = note?.richBody?.content?.find((node) => node.type === "paragraph");
+    const nestedParagraph = note?.richBody?.content
+      ?.find((node) => node.type === "blockquote")
+      ?.content?.find((node) => node.type === "paragraph");
+    if (firstParagraph?.attrs?.textAlign !== "center" || firstParagraph.attrs.firstLineIndent !== true) return null;
+    return {
+      textAlign: firstParagraph.attrs.textAlign,
+      firstLineIndent: firstParagraph.attrs.firstLineIndent,
+      nestedFirstLineIndent: nestedParagraph?.attrs?.firstLineIndent ?? null,
+      markdownHasLayoutMarkup: /text-align|text-indent|style=/i.test(note.body || ""),
+    };
+  }, "paragraph layout metadata to reach disk");
+  if (paragraphLayoutPersistence.nestedFirstLineIndent || paragraphLayoutPersistence.markdownHasLayoutMarkup) {
+    throw new Error(`Unexpected persisted paragraph layout: ${JSON.stringify(paragraphLayoutPersistence)}`);
+  }
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
     const selection = window.getSelection();
     const range = document.createRange();
     range.selectNodeContents(editor);
@@ -529,6 +897,32 @@ try {
     return true;
   })()`);
   await waitFor(cdp.send, `Boolean(document.querySelector('.table-context-toolbar'))`, "the contextual table toolbar");
+  await evaluate(cdp.send, `document.querySelector('button[aria-label^="段落对齐"]')?.click()`);
+  const tableParagraphLayoutMenu = await waitFor(
+    cdp.send,
+    `(() => {
+      const popover = document.querySelector('.alignment-format-popover');
+      if (!popover) return null;
+      return {
+        indentDisabled: Boolean(popover.querySelector('.first-line-indent-toggle:disabled')),
+      };
+    })()`,
+    "the table-cell paragraph layout menu",
+  );
+  if (!tableParagraphLayoutMenu.indentDisabled) {
+    throw new Error(`Table cells unexpectedly allowed first-line indentation: ${JSON.stringify(tableParagraphLayoutMenu)}`);
+  }
+  await evaluate(cdp.send, `document.querySelector('.alignment-format-grid button[aria-label^="右对齐"]')?.click()`);
+  const tableCellAlignment = await waitFor(
+    cdp.send,
+    `(() => {
+      const paragraph = document.querySelector('.rich-note-prosemirror table tbody tr:nth-child(2) td p');
+      return paragraph && getComputedStyle(paragraph).textAlign === 'right'
+        ? { style: paragraph.getAttribute('style'), textAlign: getComputedStyle(paragraph).textAlign }
+        : null;
+    })()`,
+    "right alignment inside one table cell",
+  );
   await evaluate(cdp.send, `document.querySelector('button[aria-label="在下方添加行"]')?.click()`);
   await waitFor(cdp.send, `document.querySelector('.rich-note-prosemirror table')?.rows.length === 5`, "an added table row");
   await evaluate(cdp.send, `document.querySelector('button[aria-label="删除当前行"]')?.click()`);
@@ -541,6 +935,28 @@ try {
   await waitFor(cdp.send, `document.querySelectorAll('.rich-note-prosemirror table th').length === 0`, "the disabled table header");
   await evaluate(cdp.send, `document.querySelector('.table-context-toolbar button[aria-pressed]')?.click()`);
   await waitFor(cdp.send, `document.querySelectorAll('.rich-note-prosemirror table th').length === 4`, "the restored table header");
+  await evaluate(cdp.send, `(() => {
+    const paragraph = document.querySelector('.rich-note-prosemirror table tbody tr:nth-child(2) td p');
+    const editor = document.querySelector('.rich-note-prosemirror');
+    if (!paragraph || !editor) return false;
+    editor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    document.querySelector('button[aria-label^="段落对齐"]')?.click();
+    return true;
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.alignment-format-popover'))`, "the final table-cell alignment menu");
+  await evaluate(cdp.send, `document.querySelector('.alignment-format-grid button[aria-label^="右对齐"]')?.click()`);
+  await waitFor(
+    cdp.send,
+    `getComputedStyle(document.querySelector('.rich-note-prosemirror table tbody tr:nth-child(2) td p')).textAlign === 'right'`,
+    "the final table-cell alignment",
+  );
 
   const tablePersistence = await waitForValue(async () => {
     const persisted = JSON.parse(await fs.readFile(smokeStatePath, "utf8"));
@@ -559,6 +975,8 @@ try {
       rows: table.content.length,
       columns: table.content[0]?.content?.length || 0,
       firstCellType: table.content[0]?.content?.[0]?.type,
+      cellTextAlign: table.content[1]?.content?.[0]?.content?.[0]?.attrs?.textAlign || null,
+      cellFirstLineIndent: table.content[1]?.content?.[0]?.content?.[0]?.attrs?.firstLineIndent ?? null,
       markdownHasDelimiter: /\|\s*:?-{3}/.test(note.body),
     };
   }, "the editable table to reach disk");
@@ -566,6 +984,8 @@ try {
     tablePersistence.rows !== 4
     || tablePersistence.columns !== 4
     || tablePersistence.firstCellType !== "tableHeader"
+    || tablePersistence.cellTextAlign !== "right"
+    || tablePersistence.cellFirstLineIndent
     || !tablePersistence.markdownHasDelimiter
   ) {
     throw new Error(`Unexpected persisted table: ${JSON.stringify(tablePersistence)}`);
@@ -576,10 +996,23 @@ try {
     cdp.send,
     `(() => {
       const table = document.querySelector('.rich-note-prosemirror table');
-      if (!table || table.rows.length !== 4 || !table.textContent.includes('推荐调节变量')) return null;
-      return { rows: table.rows.length, columns: table.rows[0]?.cells.length || 0 };
+      const firstParagraph = document.querySelector('.rich-note-prosemirror > p');
+      const firstStyle = firstParagraph?.getAttribute('style') || '';
+      if (
+        !table
+        || table.rows.length !== 4
+        || !table.textContent.includes('推荐调节变量')
+        || getComputedStyle(firstParagraph).textAlign !== 'center'
+        || !firstStyle.includes('text-indent: 2em')
+      ) return null;
+      return {
+        rows: table.rows.length,
+        columns: table.rows[0]?.cells.length || 0,
+        textAlign: getComputedStyle(firstParagraph).textAlign,
+        firstStyle,
+      };
     })()`,
-    "the pasted table after a renderer reload",
+    "the pasted table and paragraph layout after a renderer reload",
   );
 
   await evaluate(cdp.send, `document.querySelector('button[aria-label="新建笔记"]')?.click()`);
@@ -669,8 +1102,20 @@ try {
     increasedFontSize,
     decreasedFontSize,
     lineHeightEditor,
+    centeredParagraph,
+    alignmentShortcuts,
+    justifiedParagraph,
+    indentedParagraph,
+    inheritedIndent,
+    removedIndentBeforeMerge,
+    wordLayoutPaste,
+    painterLayout,
+    clearedLayout,
+    paragraphLayoutPersistence,
     formulaEditor,
     pastedTable,
+    tableParagraphLayoutMenu,
+    tableCellAlignment,
     tablePersistence,
     reopenedPastedTable,
     gridTable,

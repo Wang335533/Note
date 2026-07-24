@@ -5,6 +5,7 @@ import Image from "@tiptap/extension-image";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
+import TextAlign from "@tiptap/extension-text-align";
 import { FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
@@ -68,6 +69,7 @@ const FONT_BY_FAMILY = new Map(FONT_OPTIONS.map((option) => [option.family.toLoc
 const SIZE_BY_VALUE = new Map(SIZE_OPTIONS.map((option) => [option.value, option]));
 const SIZE_BY_SIZE = new Map(SIZE_OPTIONS.map((option) => [option.size, option]));
 const LINE_HEIGHT_VALUES = new Set(LINE_HEIGHT_OPTIONS.map((option) => option.value).filter(Boolean));
+const TEXT_ALIGN_VALUES = new Set(["left", "center", "right", "justify"]);
 const STYLE_TOKEN = /\uE000([FS])([+-])(?::([^\uE001]+))?\uE001/g;
 const FORBIDDEN_RICH_HTML = "script, style, iframe, object, embed, form, meta, link, base";
 const SAFE_HTML_ATTRIBUTES = Object.freeze({
@@ -79,6 +81,10 @@ const SAFE_HTML_ATTRIBUTES = Object.freeze({
   div: new Set(["data-type", "data-latex"]),
   ul: new Set(["data-type"]),
   li: new Set(["data-type", "data-checked"]),
+  p: new Set(["style"]),
+  h1: new Set(["style"]),
+  h2: new Set(["style"]),
+  h3: new Set(["style"]),
 });
 
 export function fontFamilyFor(value) {
@@ -157,6 +163,101 @@ function setSelectedTextBlockLineHeight(state, dispatch, value) {
   return changed;
 }
 
+function normalizeTextAlign(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "start") return "left";
+  if (normalized === "end") return "right";
+  return TEXT_ALIGN_VALUES.has(normalized) ? normalized : null;
+}
+
+function textAlignFromElement(element) {
+  return normalizeTextAlign(element?.style?.textAlign)
+    || normalizeTextAlign(element?.getAttribute?.("align"));
+}
+
+function firstLineIndentFromElement(element) {
+  const styleText = String(element?.getAttribute?.("style") || "");
+  const textIndent = String(element?.style?.textIndent || "");
+  const textIndentValue = Number.parseFloat(textIndent);
+  if (Number.isFinite(textIndentValue) && textIndentValue > 0) return true;
+  const wordIndent = /(?:^|;)\s*mso-char-indent-count\s*:\s*([+-]?(?:\d+\.?\d*|\.\d+))/i.exec(styleText);
+  const wordIndentValue = Number.parseFloat(wordIndent?.[1] || "");
+  return Number.isFinite(wordIndentValue) && wordIndentValue > 0 ? true : null;
+}
+
+function selectedTextBlocks(state) {
+  const blocks = [];
+  const add = (node, position, parent) => {
+    if (!["paragraph", "heading"].includes(node?.type?.name)) return;
+    blocks.push({ node, position, parent });
+  };
+  const { from, to, empty, $from } = state.selection;
+  if (empty) {
+    for (let depth = $from.depth; depth > 0; depth -= 1) {
+      const node = $from.node(depth);
+      if (!["paragraph", "heading"].includes(node.type.name)) continue;
+      add(node, $from.before(depth), $from.node(depth - 1));
+      break;
+    }
+    return blocks;
+  }
+  state.doc.nodesBetween(from, to, (node, position, parent) => add(node, position, parent));
+  return blocks;
+}
+
+function selectedDirectParagraphs(state) {
+  return selectedTextBlocks(state).filter(({ node, parent }) => (
+    node.type.name === "paragraph" && parent?.type?.name === "doc"
+  ));
+}
+
+function setSelectedDirectParagraphIndent(state, dispatch, value) {
+  const paragraphs = selectedDirectParagraphs(state);
+  if (!paragraphs.length) return false;
+  const firstLineIndent = value === true ? true : null;
+  let transaction = state.tr;
+  let changed = false;
+  for (const { node, position } of paragraphs) {
+    if (node.attrs.firstLineIndent === firstLineIndent) continue;
+    transaction = transaction.setNodeMarkup(position, undefined, {
+      ...node.attrs,
+      firstLineIndent,
+    });
+    changed = true;
+  }
+  if (changed && dispatch) dispatch(transaction);
+  return true;
+}
+
+const NoteTextAlign = TextAlign.extend({
+  addGlobalAttributes() {
+    return [{
+      types: this.options.types,
+      attributes: {
+        textAlign: {
+          default: null,
+          keepOnSplit: true,
+          parseHTML: (element) => {
+            const alignment = textAlignFromElement(element);
+            return alignment === "left" ? null : alignment;
+          },
+          renderHTML: (attributes) => normalizeTextAlign(attributes.textAlign)
+            ? { style: `text-align: ${attributes.textAlign}` }
+            : {},
+        },
+      },
+    }];
+  },
+  addKeyboardShortcuts() {
+    return {
+      "Mod-l": () => this.editor.commands.unsetTextAlign(),
+      "Mod-e": () => this.editor.commands.setTextAlign("center"),
+      "Mod-r": () => this.editor.commands.setTextAlign("right"),
+      "Mod-j": () => this.editor.commands.setTextAlign("justify"),
+    };
+  },
+});
+
 const NoteParagraphLineHeight = Extension.create({
   name: "noteParagraphLineHeight",
   addGlobalAttributes() {
@@ -180,6 +281,53 @@ const NoteParagraphLineHeight = Extension.create({
     return {
       setParagraphLineHeight: (value) => ({ state, dispatch }) => setSelectedTextBlockLineHeight(state, dispatch, value),
       unsetParagraphLineHeight: () => ({ state, dispatch }) => setSelectedTextBlockLineHeight(state, dispatch, null),
+    };
+  },
+});
+
+const NoteFirstLineIndent = Extension.create({
+  name: "noteFirstLineIndent",
+  priority: 110,
+  addGlobalAttributes() {
+    return [{
+      types: ["paragraph"],
+      attributes: {
+        firstLineIndent: {
+          default: null,
+          keepOnSplit: true,
+          parseHTML: (element) => firstLineIndentFromElement(element),
+          renderHTML: (attributes) => attributes.firstLineIndent === true
+            ? { style: "text-indent: 2em" }
+            : {},
+        },
+      },
+    }];
+  },
+  addCommands() {
+    return {
+      setFirstLineIndent: () => ({ state, dispatch }) => (
+        setSelectedDirectParagraphIndent(state, dispatch, true)
+      ),
+      unsetFirstLineIndent: () => ({ state, dispatch }) => (
+        setSelectedDirectParagraphIndent(state, dispatch, null)
+      ),
+      toggleFirstLineIndent: () => ({ state, dispatch }) => {
+        const paragraphs = selectedDirectParagraphs(state);
+        if (!paragraphs.length) return false;
+        const shouldRemove = paragraphs.every(({ node }) => node.attrs.firstLineIndent === true);
+        return setSelectedDirectParagraphIndent(state, dispatch, shouldRemove ? null : true);
+      },
+    };
+  },
+  addKeyboardShortcuts() {
+    return {
+      Backspace: () => {
+        const { selection } = this.editor.state;
+        if (!selection.empty || selection.$from.parentOffset !== 0) return false;
+        const [paragraph] = selectedDirectParagraphs(this.editor.state);
+        if (paragraph?.node?.attrs?.firstLineIndent !== true) return false;
+        return this.editor.commands.unsetFirstLineIndent();
+      },
     };
   },
 });
@@ -466,6 +614,12 @@ export function createEditorExtensions({
     FontSize,
     NoteFontSizeStep,
     NoteParagraphLineHeight,
+    NoteTextAlign.configure({
+      types: ["paragraph", "heading"],
+      alignments: ["left", "center", "right", "justify"],
+      defaultAlignment: null,
+    }),
+    NoteFirstLineIndent,
     TaskList,
     TaskItem.configure({ nested: true }),
     NoteTable.configure({
@@ -626,6 +780,20 @@ function protectMathMarkup(markdown) {
   return prepared + source.slice(cursor);
 }
 
+function normalizeSafeParagraphLayoutStyle(element) {
+  const tagName = String(element?.tagName || "").toLowerCase();
+  if (!["p", "h1", "h2", "h3"].includes(tagName)) return;
+  const declarations = [];
+  const textAlign = textAlignFromElement(element);
+  if (textAlign && textAlign !== "left") declarations.push(`text-align: ${textAlign}`);
+  if (tagName === "p" && firstLineIndentFromElement(element) === true) {
+    declarations.push("text-indent: 2em");
+  }
+  element.removeAttribute("align");
+  if (declarations.length) element.setAttribute("style", declarations.join("; "));
+  else element.removeAttribute("style");
+}
+
 function sanitizeRichDocument(parsed) {
   parsed.querySelectorAll(FORBIDDEN_RICH_HTML).forEach((node) => node.remove());
   parsed.querySelectorAll('[data-type="inline-math"], [data-type="block-math"]').forEach((node) => {
@@ -644,6 +812,7 @@ function sanitizeRichDocument(parsed) {
     item.dataset.checked = String(input.checked);
     input.remove();
   });
+  parsed.body.querySelectorAll("p, h1, h2, h3").forEach(normalizeSafeParagraphLayoutStyle);
   parsed.body.querySelectorAll("*").forEach((node) => {
     const allowed = SAFE_HTML_ATTRIBUTES[node.tagName.toLowerCase()] || new Set();
     for (const attribute of [...node.attributes]) {
@@ -721,6 +890,32 @@ function richBodyTableInfo(value) {
   };
 }
 
+export function normalizeParagraphLayoutContext(value, { allowDirectIndent = true } = {}) {
+  const rewrite = (node, parentType = null) => {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return node;
+    const next = { ...node };
+    if (node.attrs && typeof node.attrs === "object" && !Array.isArray(node.attrs)) {
+      next.attrs = { ...node.attrs };
+      if (["paragraph", "heading"].includes(node.type) && "textAlign" in next.attrs) {
+        const alignment = normalizeTextAlign(next.attrs.textAlign);
+        next.attrs.textAlign = alignment === "left" ? null : alignment;
+      }
+      if (node.type === "paragraph" && "firstLineIndent" in next.attrs) {
+        next.attrs.firstLineIndent = allowDirectIndent
+          && parentType === "doc"
+          && next.attrs.firstLineIndent === true
+          ? true
+          : null;
+      }
+    }
+    if (Array.isArray(node.content)) {
+      next.content = node.content.map((child) => rewrite(child, node.type));
+    }
+    return next;
+  };
+  return rewrite(value);
+}
+
 function plainTextRichBody(value) {
   const lines = String(value || "").replace(/\r\n?/g, "\n").split("\n");
   return {
@@ -776,10 +971,10 @@ export function richBodyFromLegacyMarkdown(markdown, options = {}) {
   if (!String(markdown || "").trim()) return emptyRichBody();
   if (markdownTableInfo(markdown).oversized) return plainTextRichBody(markdown);
   try {
-    const value = applyStyleSentinels(generateJSON(
+    const value = normalizeParagraphLayoutContext(applyStyleSentinels(generateJSON(
       safeHtmlFromMarkdown(markdown),
       createEditorExtensions(options),
-    ));
+    )));
     if (richBodyTableInfo(value).oversized) return plainTextRichBody(markdown);
     const migrated = migrateMathInRichBody(value);
     return normalizeRichBody(migrated.richBody) || plainTextRichBody(markdown);
@@ -791,10 +986,10 @@ export function richBodyFromLegacyMarkdown(markdown, options = {}) {
 export function richBodyFromHtml(html, options = {}) {
   if (!String(html || "").trim()) return null;
   try {
-    const value = generateJSON(
+    const value = normalizeParagraphLayoutContext(generateJSON(
       safeHtmlFromRichHtml(html),
       createEditorExtensions(options),
-    );
+    ));
     if (richBodyTableInfo(value).oversized) return null;
     const migrated = migrateMathInRichBody(value);
     return normalizeRichBody(migrated.richBody);
@@ -898,6 +1093,27 @@ export function migratePastedMathSlice(slice, schema) {
   }
 }
 
+export function normalizePastedParagraphLayoutSlice(slice, schema, { allowFirstLineIndent = false } = {}) {
+  if (!slice?.content || !schema) return slice;
+  const source = {
+    type: "doc",
+    content: slice.content.toJSON(),
+  };
+  const normalized = normalizeParagraphLayoutContext(source, {
+    allowDirectIndent: allowFirstLineIndent,
+  });
+  if (JSON.stringify(normalized) === JSON.stringify(source)) return slice;
+  try {
+    return new Slice(
+      Fragment.fromJSON(schema, normalized.content || []),
+      slice.openStart,
+      slice.openEnd,
+    );
+  } catch {
+    return slice;
+  }
+}
+
 export function clipboardTextFromSlice(slice) {
   const output = [];
   const append = (value) => {
@@ -979,6 +1195,11 @@ export function formatStateForEditor(editor, painterActive = false) {
       font: "",
       size: "",
       lineHeight: "",
+      textAlign: "left",
+      textAlignMixed: false,
+      canTextAlign: false,
+      firstLineIndent: false,
+      canFirstLineIndent: false,
       block: "paragraph",
       canClear: false,
       painterActive,
@@ -994,6 +1215,14 @@ export function formatStateForEditor(editor, painterActive = false) {
   const lineHeightAttrs = editor.isActive("heading")
     ? editor.getAttributes("heading")
     : editor.getAttributes("paragraph");
+  const layoutBlocks = selectedTextBlocks(editor.state);
+  const alignments = layoutBlocks.map(({ node }) => (
+    normalizeTextAlign(node.attrs.textAlign) || "left"
+  ));
+  const textAlignMixed = new Set(alignments).size > 1;
+  const directParagraphs = layoutBlocks.filter(({ node, parent }) => (
+    node.type.name === "paragraph" && parent?.type?.name === "doc"
+  ));
   const block = editor.isActive("heading", { level: 1 }) ? "heading-1"
     : editor.isActive("heading", { level: 2 }) ? "heading-2"
       : editor.isActive("heading", { level: 3 }) ? "heading-3"
@@ -1013,6 +1242,12 @@ export function formatStateForEditor(editor, painterActive = false) {
     font: fontValueFor(textStyle.fontFamily),
     size: sizeValueFor(textStyle.fontSize),
     lineHeight: LINE_HEIGHT_VALUES.has(lineHeightAttrs.lineHeight) ? lineHeightAttrs.lineHeight : "",
+    textAlign: textAlignMixed ? "left" : alignments[0] || "left",
+    textAlignMixed,
+    canTextAlign: layoutBlocks.length > 0,
+    firstLineIndent: directParagraphs.length > 0
+      && directParagraphs.every(({ node }) => node.attrs.firstLineIndent === true),
+    canFirstLineIndent: directParagraphs.length > 0,
     block,
     canClear: !editor.state.selection.empty,
     painterActive,
