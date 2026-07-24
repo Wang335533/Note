@@ -60,7 +60,7 @@
     "cross-env": "10.1.0",
     "electron": "43.1.0",
     "electron-builder": "26.15.3",
-    "katex": "0.17.0",
+    "katex": "0.18.1",
     "marked": "18.0.6",
     "react": "19.2.0",
     "react-dom": "19.2.0",
