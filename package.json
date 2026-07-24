@@ -55,7 +55,7 @@
     "@tiptap/pm": "3.28.0",
     "@tiptap/react": "3.28.0",
     "@tiptap/starter-kit": "3.28.0",
-    "@vitejs/plugin-react": "5.0.4",
+    "@vitejs/plugin-react": "6.0.4",
     "concurrently": "10.0.3",
     "cross-env": "10.1.0",
     "electron": "43.1.0",
