@@ -161,6 +161,51 @@ test("paragraph line spacing is strictly validated and stays out of Markdown", (
   }), false);
 });
 
+test("paragraph alignment and first-line indentation are strict visual metadata", () => {
+  const laidOut = {
+    type: "doc",
+    content: [
+      {
+        type: "heading",
+        attrs: { level: 2, textAlign: "center" },
+        content: [{ type: "text", text: "研究设计" }],
+      },
+      {
+        type: "paragraph",
+        attrs: { textAlign: "justify", firstLineIndent: true },
+        content: [{ type: "text", text: "正文段落" }],
+      },
+      {
+        type: "blockquote",
+        content: [{
+          type: "paragraph",
+          attrs: { textAlign: "right", firstLineIndent: null },
+          content: [{ type: "text", text: "引用" }],
+        }],
+      },
+    ],
+  };
+  assert.equal(isRichBody(laidOut), true);
+  assert.equal(markdownFromRichBody(laidOut), "## 研究设计\n\n正文段落\n\n> 引用");
+  assert.doesNotMatch(markdownFromRichBody(laidOut), /align|indent|style/i);
+
+  const invalidAlignment = structuredClone(laidOut);
+  invalidAlignment.content[1].attrs.textAlign = "distribute";
+  assert.equal(isRichBody(invalidAlignment), false);
+
+  const invalidIndentValue = structuredClone(laidOut);
+  invalidIndentValue.content[1].attrs.firstLineIndent = "2em";
+  assert.equal(isRichBody(invalidIndentValue), false);
+
+  const nestedIndent = structuredClone(laidOut);
+  nestedIndent.content[2].content[0].attrs.firstLineIndent = true;
+  assert.equal(isRichBody(nestedIndent), false);
+
+  const headingIndent = structuredClone(laidOut);
+  headingIndent.content[0].attrs.firstLineIndent = true;
+  assert.equal(isRichBody(headingIndent), false);
+});
+
 test("Tiptap inline leaf nodes keep supported formatting across hard breaks", () => {
   const textStyle = { type: "textStyle", attrs: { fontFamily: "KaiTi", fontSize: null } };
   assert.equal(isRichBody({

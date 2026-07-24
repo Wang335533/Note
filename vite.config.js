@@ -5,6 +5,10 @@ export default defineConfig({
   base: "./",
   plugins: [react()],
   optimizeDeps: {
-    include: ["desktop-note/store", "desktop-note/rich-text"],
+    include: [
+      "desktop-note/store",
+      "desktop-note/library-files",
+      "desktop-note/rich-text",
+    ],
   },
 });

@@ -17,6 +17,7 @@ import {
   migrateRichBodyTables,
   migratePastedMathSlice,
   markdownTableInfo,
+  normalizePastedParagraphLayoutSlice,
   richBodyFromHtml,
   richBodyFromLegacyMarkdown,
   setFontFamilyForEditor,
@@ -30,6 +31,7 @@ const {
   plainTextFromRichBody,
 } = richTextModule;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const PARAGRAPH_LAYOUT_HTML = /<(?:p|h[1-3])\b[^>]*(?:\balign\s*=|\bstyle\s*=\s*["'][^"']*(?:text-align|text-indent|mso-char-indent-count))/i;
 const TABLE_COMMANDS = new Set([
   "addRowBefore",
   "addRowAfter",
@@ -77,6 +79,8 @@ function snapshotForPainter(editor) {
     fontFamily: textStyle.fontFamily || "",
     fontSize: textStyle.fontSize || "",
     lineHeight: state.lineHeight || "",
+    textAlign: state.textAlign || "left",
+    firstLineIndent: state.firstLineIndent,
     block: state.block,
   };
 }
@@ -315,6 +319,12 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
     chain = snapshot.lineHeight
       ? chain.setParagraphLineHeight(snapshot.lineHeight)
       : chain.unsetParagraphLineHeight();
+    chain = snapshot.textAlign && snapshot.textAlign !== "left"
+      ? chain.setTextAlign(snapshot.textAlign)
+      : chain.unsetTextAlign();
+    chain = snapshot.firstLineIndent
+      ? chain.setFirstLineIndent()
+      : chain.unsetFirstLineIndent();
     const applied = chain.run();
     callbacksRef.current.showToast?.("格式已应用");
     emitSelection(editor);
@@ -416,9 +426,15 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       },
       clipboardTextSerializer: clipboardTextFromSlice,
       transformPasted(slice, view) {
-        return migratePastedMathSlice(slice, view.state.schema);
+        const migrated = migratePastedMathSlice(slice, view.state.schema);
+        const { $from } = view.state.selection;
+        const allowFirstLineIndent = $from.depth === 1
+          && $from.parent.type.name === "paragraph";
+        return normalizePastedParagraphLayoutSlice(migrated, view.state.schema, {
+          allowFirstLineIndent,
+        });
       },
-      handlePaste(_view, event) {
+      handlePaste(view, event, slice) {
         if (readOnly) return false;
         const files = [...(event.clipboardData?.files || [])];
         if (files.some((file) => IMAGE_TYPES.has(file.type))) {
@@ -429,6 +445,37 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
         const text = event.clipboardData?.getData("text/plain") || "";
         const html = event.clipboardData?.getData("text/html") || "";
         const options = { resolveAssetUrl: (id) => noteApi.getAssetUrl?.(id) || "" };
+        const {
+          $from,
+          $to,
+          empty,
+          from,
+          to,
+        } = view.state.selection;
+        const inOneDirectParagraph = $from.depth === 1
+          && $to.depth === 1
+          && $from.sameParent($to)
+          && $from.parent.type.name === "paragraph";
+        const replacesDirectParagraph = inOneDirectParagraph && (
+          (empty && $from.parent.content.size === 0)
+          || (!empty && from === $from.start() && to === $from.end())
+        );
+        if (
+          replacesDirectParagraph
+          && PARAGRAPH_LAYOUT_HTML.test(html)
+          && slice?.content?.childCount
+          && view.state.doc.canReplace(
+            $from.index(0),
+            $from.indexAfter(0),
+            slice.content,
+          )
+        ) {
+          event.preventDefault();
+          view.dispatch(view.state.tr
+            .replaceWith($from.before(1), $from.after(1), slice.content)
+            .scrollIntoView());
+          return true;
+        }
         const hasHtmlTable = /<table(?:\s|>)/i.test(html);
         if (hasHtmlTable) {
           const content = richBodyFromHtml(html, options);
@@ -557,6 +604,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
     applyBlock(type) {
       if (!editorIsReady(editor) || readOnly) return false;
       let chain = editor.chain().focus();
+      if (formatStateForEditor(editor).canFirstLineIndent) chain = chain.unsetFirstLineIndent();
       if (type === "quote") chain = editor.isActive("blockquote") ? chain.unsetBlockquote() : chain.setBlockquote();
       else if (type === "code-block") chain = editor.isActive("codeBlock") ? chain.setParagraph() : chain.setCodeBlock();
       else chain = applyBlockToChain(chain, type);
@@ -569,13 +617,31 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
         ? chain.setParagraphLineHeight(value).run()
         : chain.unsetParagraphLineHeight().run();
     },
+    applyTextAlign(value = "left") {
+      if (!editorIsReady(editor) || readOnly) return false;
+      const chain = editor.chain().focus();
+      return value === "left"
+        ? chain.unsetTextAlign().run()
+        : chain.setTextAlign(value).run();
+    },
+    toggleFirstLineIndent() {
+      if (!editorIsReady(editor) || readOnly) return false;
+      return editor.chain().focus().toggleFirstLineIndent().run();
+    },
     stepFontSize(direction) {
       if (!editorIsReady(editor) || readOnly) return false;
       return stepFontSizeForEditor(editor, direction);
     },
     clearFormatting() {
       if (!editorIsReady(editor) || readOnly || editor.state.selection.empty) return false;
-      return editor.chain().focus().unsetAllMarks().removeEmptyTextStyle().unsetParagraphLineHeight().run();
+      return editor.chain()
+        .focus()
+        .unsetAllMarks()
+        .removeEmptyTextStyle()
+        .unsetParagraphLineHeight()
+        .unsetTextAlign()
+        .unsetFirstLineIndent()
+        .run();
     },
     insertLink(url, label = "") {
       if (!editorIsReady(editor) || readOnly) return false;
