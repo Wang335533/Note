@@ -2,6 +2,9 @@ import {
   CaretLeft,
   CaretRight,
   Code,
+  Columns,
+  ColumnsPlusLeft,
+  ColumnsPlusRight,
   DotsThree,
   Eraser,
   LinkSimple,
@@ -10,6 +13,10 @@ import {
   ListNumbers,
   PaintBrush,
   Quotes,
+  Rows,
+  RowsPlusBottom,
+  RowsPlusTop,
+  Table as TableIcon,
   TextB,
   TextItalic,
   TextStrikethrough,
@@ -51,33 +58,37 @@ export function FormattingToolbar({
 }) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [tableOpen, setTableOpen] = useState(false);
+  const [tableHover, setTableHover] = useState({ rows: 3, columns: 3 });
   const [linkUrl, setLinkUrl] = useState("");
   const [linkLabel, setLinkLabel] = useState("");
   const linkInputRef = useRef(null);
   const toolbarShellRef = useRef(null);
 
   useEffect(() => {
-    if (!moreOpen && !linkOpen) return undefined;
+    if (!moreOpen && !linkOpen && !tableOpen) return undefined;
     const closeOnEscape = (event) => {
       if (event.key !== "Escape") return;
       setMoreOpen(false);
       setLinkOpen(false);
+      setTableOpen(false);
       editorRef.current?.cancelFormatPainter?.();
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [editorRef, linkOpen, moreOpen]);
+  }, [editorRef, linkOpen, moreOpen, tableOpen]);
 
   useEffect(() => {
-    if (!moreOpen && !linkOpen) return undefined;
+    if (!moreOpen && !linkOpen && !tableOpen) return undefined;
     const closeOnOutsidePointer = (event) => {
       if (toolbarShellRef.current?.contains(event.target)) return;
       setMoreOpen(false);
       setLinkOpen(false);
+      setTableOpen(false);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer, true);
     return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
-  }, [linkOpen, moreOpen]);
+  }, [linkOpen, moreOpen, tableOpen]);
 
   useEffect(() => {
     if (linkOpen) requestAnimationFrame(() => linkInputRef.current?.focus());
@@ -86,16 +97,18 @@ export function FormattingToolbar({
   if (readOnly) return null;
   if (collapsed) {
     return (
-      <div className="format-toolbar-shell is-collapsed">
-        <button
-          type="button"
-          className="format-collapse-symbol"
-          aria-label="展开格式工具栏"
-          title="展开格式工具栏"
-          onClick={onToggleCollapsed}
-        >
-          <CaretRight size={15} weight="bold" />
-        </button>
+      <div className="format-toolbar-stack">
+        <div className="format-toolbar-shell is-collapsed">
+          <button
+            type="button"
+            className="format-collapse-symbol"
+            aria-label="展开格式工具栏"
+            title="展开格式工具栏"
+            onClick={onToggleCollapsed}
+          >
+            <CaretRight size={15} weight="bold" />
+          </button>
+        </div>
       </div>
     );
   }
@@ -134,37 +147,103 @@ export function FormattingToolbar({
   };
 
   return (
-    <div ref={toolbarShellRef} className="format-toolbar-shell">
-      <div className="format-toolbar" role="toolbar" aria-label="正文格式" onKeyDown={moveToolbarFocus}>
-        <FormatButton label="收起格式工具栏" onClick={onToggleCollapsed}>
-          <CaretLeft size={14} weight="bold" />
-        </FormatButton>
-        <label className="format-select paragraph-format-select" title="段落样式">
-          <select value={paragraphValue} aria-label="段落样式" onChange={(event) => applyBlock(event.target.value)}>
-            {BLOCK_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>
-        <span className="format-divider" aria-hidden="true" />
-        <FormatButton
-          label="缩小一号字体（Ctrl + [）"
-          disabled={!canDecreaseFont}
-          onClick={() => editorRef.current?.stepFontSize?.("decrease")}
-        ><span className="font-step-symbol" aria-hidden="true"><b>A</b><i>↓</i></span></FormatButton>
-        <FormatButton
-          label="放大一号字体（Ctrl + ]）"
-          disabled={!canIncreaseFont}
-          onClick={() => editorRef.current?.stepFontSize?.("increase")}
-        ><span className="font-step-symbol" aria-hidden="true"><b>A</b><i>↑</i></span></FormatButton>
-        <FormatButton label="加粗" active={formatState.bold} onClick={() => applyInline("bold")}><TextB size={16} weight="bold" /></FormatButton>
-        <FormatButton label="斜体" active={formatState.italic} onClick={() => applyInline("italic")}><TextItalic size={16} /></FormatButton>
-        <FormatButton label="下划线" active={formatState.underline} onClick={() => applyInline("underline")}><TextUnderline size={16} /></FormatButton>
-        <FormatButton label="项目符号" active={formatState.block === "bullet"} onClick={() => applyBlock("bullet")}><ListBullets size={17} /></FormatButton>
-        <FormatButton label="编号列表" active={formatState.block === "numbered"} onClick={() => applyBlock("numbered")}><ListNumbers size={17} /></FormatButton>
-        <FormatButton label="更多格式" active={moreOpen} onClick={() => {
-          setLinkOpen(false);
-          setMoreOpen((open) => !open);
-        }}><DotsThree size={17} weight="bold" /></FormatButton>
+    <div ref={toolbarShellRef} className={`format-toolbar-stack ${formatState.inTable ? "has-table-context" : ""}`}>
+      <div className="format-toolbar-shell">
+        <div className="format-toolbar" role="toolbar" aria-label="正文格式" onKeyDown={moveToolbarFocus}>
+          <FormatButton label="收起格式工具栏" onClick={onToggleCollapsed}>
+            <CaretLeft size={14} weight="bold" />
+          </FormatButton>
+          <label className="format-select paragraph-format-select" title="段落样式">
+            <select value={paragraphValue} aria-label="段落样式" onChange={(event) => applyBlock(event.target.value)}>
+              {BLOCK_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <span className="format-divider" aria-hidden="true" />
+          <FormatButton
+            label="缩小一号字体（Ctrl + [）"
+            disabled={!canDecreaseFont}
+            onClick={() => editorRef.current?.stepFontSize?.("decrease")}
+          ><span className="font-step-symbol" aria-hidden="true"><b>A</b><i>↓</i></span></FormatButton>
+          <FormatButton
+            label="放大一号字体（Ctrl + ]）"
+            disabled={!canIncreaseFont}
+            onClick={() => editorRef.current?.stepFontSize?.("increase")}
+          ><span className="font-step-symbol" aria-hidden="true"><b>A</b><i>↑</i></span></FormatButton>
+          <FormatButton label="加粗" active={formatState.bold} onClick={() => applyInline("bold")}><TextB size={16} weight="bold" /></FormatButton>
+          <FormatButton label="斜体" active={formatState.italic} onClick={() => applyInline("italic")}><TextItalic size={16} /></FormatButton>
+          <FormatButton label="下划线" active={formatState.underline} onClick={() => applyInline("underline")}><TextUnderline size={16} /></FormatButton>
+          <FormatButton label="项目符号" active={formatState.block === "bullet"} onClick={() => applyBlock("bullet")}><ListBullets size={17} /></FormatButton>
+          <FormatButton label="编号列表" active={formatState.block === "numbered"} onClick={() => applyBlock("numbered")}><ListNumbers size={17} /></FormatButton>
+          <FormatButton label="插入表格" active={tableOpen} disabled={formatState.inTable} onClick={() => {
+            setLinkOpen(false);
+            setMoreOpen(false);
+            setTableOpen((open) => !open);
+          }}><TableIcon size={17} /></FormatButton>
+          <FormatButton label="更多格式" active={moreOpen} onClick={() => {
+            setLinkOpen(false);
+            setTableOpen(false);
+            setMoreOpen((open) => !open);
+          }}><DotsThree size={17} weight="bold" /></FormatButton>
+        </div>
       </div>
+
+      {formatState.inTable ? (
+        <div
+          className="table-context-toolbar"
+          role="toolbar"
+          aria-label="表格操作"
+          onMouseDown={(event) => {
+            if (event.target.closest("button")) event.preventDefault();
+          }}
+        >
+          <span className="table-context-label"><TableIcon size={14} /> 表格</span>
+          <button type="button" disabled={!formatState.canAddTableRow} aria-label="在上方添加行" onClick={() => editorRef.current?.applyTableCommand?.("addRowBefore")}><RowsPlusTop size={15} />上行</button>
+          <button type="button" disabled={!formatState.canAddTableRow} aria-label="在下方添加行" onClick={() => editorRef.current?.applyTableCommand?.("addRowAfter")}><RowsPlusBottom size={15} />下行</button>
+          <button type="button" disabled={!formatState.canAddTableColumn} aria-label="在左侧添加列" onClick={() => editorRef.current?.applyTableCommand?.("addColumnBefore")}><ColumnsPlusLeft size={15} />左列</button>
+          <button type="button" disabled={!formatState.canAddTableColumn} aria-label="在右侧添加列" onClick={() => editorRef.current?.applyTableCommand?.("addColumnAfter")}><ColumnsPlusRight size={15} />右列</button>
+          <span className="table-context-divider" aria-hidden="true" />
+          <button type="button" aria-label="删除当前行" onClick={() => editorRef.current?.applyTableCommand?.("deleteRow")}><Rows size={15} />删行</button>
+          <button type="button" aria-label="删除当前列" onClick={() => editorRef.current?.applyTableCommand?.("deleteColumn")}><Columns size={15} />删列</button>
+          <button
+            type="button"
+            className={formatState.tableHasHeader ? "is-active" : ""}
+            aria-pressed={formatState.tableHasHeader}
+            onClick={() => editorRef.current?.applyTableCommand?.("toggleHeaderRow")}
+          >表头</button>
+          <button type="button" className="is-danger" onClick={() => editorRef.current?.applyTableCommand?.("deleteTable")}>删表</button>
+        </div>
+      ) : null}
+
+      {tableOpen ? (
+        <div className="format-popover table-grid-popover" aria-label="选择表格大小">
+          <header>
+            <span>插入表格</span>
+            <strong>{tableHover.rows} × {tableHover.columns}</strong>
+          </header>
+          <div className="table-grid-picker" role="grid" aria-label="表格行列">
+            {Array.from({ length: 8 }, (_, rowIndex) => Array.from({ length: 10 }, (__, columnIndex) => {
+              const rows = rowIndex + 1;
+              const columns = columnIndex + 1;
+              const selected = rows <= tableHover.rows && columns <= tableHover.columns;
+              return (
+                <button
+                  type="button"
+                  key={`${rows}-${columns}`}
+                  className={selected ? "is-selected" : ""}
+                  aria-label={`${rows} 行 ${columns} 列`}
+                  onMouseEnter={() => setTableHover({ rows, columns })}
+                  onFocus={() => setTableHover({ rows, columns })}
+                  onClick={() => {
+                    editorRef.current?.insertTable?.(rows, columns);
+                    setTableOpen(false);
+                  }}
+                />
+              );
+            }))}
+          </div>
+          <small>首行默认为表头</small>
+        </div>
+      ) : null}
 
       {linkOpen ? (
         <form className="format-popover link-format-popover" aria-label="插入链接" onSubmit={submitLink}>

@@ -4,6 +4,7 @@ import { BlockMath, InlineMath } from "@tiptap/extension-mathematics";
 import Image from "@tiptap/extension-image";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
+import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { FontFamily, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import StarterKit from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extensions";
@@ -17,6 +18,8 @@ import { attachmentIdFromUrl } from "desktop-note/library-files";
 const {
   emptyRichBody,
   isWesternFontCharacter,
+  MAX_TABLE_COLUMNS,
+  MAX_TABLE_ROWS,
   migrateMathInRichBody,
   normalizeRichBody,
   renderNoteFontFamily,
@@ -66,6 +69,17 @@ const SIZE_BY_VALUE = new Map(SIZE_OPTIONS.map((option) => [option.value, option
 const SIZE_BY_SIZE = new Map(SIZE_OPTIONS.map((option) => [option.size, option]));
 const LINE_HEIGHT_VALUES = new Set(LINE_HEIGHT_OPTIONS.map((option) => option.value).filter(Boolean));
 const STYLE_TOKEN = /\uE000([FS])([+-])(?::([^\uE001]+))?\uE001/g;
+const FORBIDDEN_RICH_HTML = "script, style, iframe, object, embed, form, meta, link, base";
+const SAFE_HTML_ATTRIBUTES = Object.freeze({
+  a: new Set(["href", "title"]),
+  img: new Set(["src", "alt", "title", "width", "height"]),
+  td: new Set(["colspan", "rowspan", "align"]),
+  th: new Set(["colspan", "rowspan", "align"]),
+  span: new Set(["data-type", "data-latex"]),
+  div: new Set(["data-type", "data-latex"]),
+  ul: new Set(["data-type"]),
+  li: new Set(["data-type", "data-checked"]),
+});
 
 export function fontFamilyFor(value) {
   return FONT_BY_VALUE.get(value)?.family || "";
@@ -194,6 +208,48 @@ const NoteFontFamily = FontFamily.extend({
         },
       },
     }));
+  },
+});
+
+const NoteTableCell = TableCell.extend({
+  content: "paragraph+",
+});
+
+const NoteTableHeader = TableHeader.extend({
+  content: "paragraph+",
+});
+
+function selectedTableDimensions(editor) {
+  const $from = editor?.state?.selection?.$from;
+  if (!$from) return { rows: 0, columns: 0 };
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const node = $from.node(depth);
+    if (node.type.name !== "table") continue;
+    let columns = 0;
+    node.forEach((row) => {
+      let rowColumns = 0;
+      row.forEach((cell) => {
+        rowColumns += Math.max(1, Number(cell.attrs?.colspan) || 1);
+      });
+      columns = Math.max(columns, rowColumns);
+    });
+    return { rows: node.childCount, columns };
+  }
+  return { rows: 0, columns: 0 };
+}
+
+const NoteTable = Table.extend({
+  addKeyboardShortcuts() {
+    const inherited = this.parent?.() || {};
+    return {
+      ...inherited,
+      Tab: () => {
+        if (this.editor.commands.goToNextCell()) return true;
+        if (selectedTableDimensions(this.editor).rows >= MAX_TABLE_ROWS) return true;
+        if (!this.editor.can().addRowAfter()) return false;
+        return this.editor.chain().addRowAfter().goToNextCell().run();
+      },
+    };
   },
 });
 
@@ -412,6 +468,16 @@ export function createEditorExtensions({
     NoteParagraphLineHeight,
     TaskList,
     TaskItem.configure({ nested: true }),
+    NoteTable.configure({
+      resizable: true,
+      handleWidth: 5,
+      cellMinWidth: 96,
+      lastColumnResizable: true,
+      allowTableNodeSelection: false,
+    }),
+    TableRow,
+    NoteTableHeader,
+    NoteTableCell,
     NoteInlineMath.configure({ onClick: (node, pos) => onMathClick(node, pos, "inline"), katexOptions }),
     NoteBlockMath.configure({ onClick: (node, pos) => onMathClick(node, pos, "block"), katexOptions }),
     NoteMathInput.configure({ openMathEditor }),
@@ -560,19 +626,11 @@ function protectMathMarkup(markdown) {
   return prepared + source.slice(cursor);
 }
 
-function safeHtmlFromMarkdown(markdown) {
-  const prepared = protectMathMarkup(protectOwnPairs(markdown));
-  const parsed = new DOMParser().parseFromString(marked.parse(prepared, {
-    gfm: true,
-    breaks: false,
-  }), "text/html");
-  parsed.querySelectorAll("script, style, iframe, object, embed, form, meta, link").forEach((node) => node.remove());
+function sanitizeRichDocument(parsed) {
+  parsed.querySelectorAll(FORBIDDEN_RICH_HTML).forEach((node) => node.remove());
   parsed.querySelectorAll('[data-type="inline-math"], [data-type="block-math"]').forEach((node) => {
     const latex = node.getAttribute("data-latex") || "";
     if (!latex.trim()) node.remove();
-    for (const attribute of [...node.attributes]) {
-      if (!["data-type", "data-latex"].includes(attribute.name)) node.removeAttribute(attribute.name);
-    }
   });
   parsed.querySelectorAll("a[href]").forEach((anchor) => {
     if (!/^(?:https?:|mailto:)/i.test(anchor.getAttribute("href") || "")) anchor.removeAttribute("href");
@@ -586,7 +644,92 @@ function safeHtmlFromMarkdown(markdown) {
     item.dataset.checked = String(input.checked);
     input.remove();
   });
+  parsed.body.querySelectorAll("*").forEach((node) => {
+    const allowed = SAFE_HTML_ATTRIBUTES[node.tagName.toLowerCase()] || new Set();
+    for (const attribute of [...node.attributes]) {
+      if (!allowed.has(attribute.name.toLowerCase())) node.removeAttribute(attribute.name);
+    }
+  });
   return parsed.body.innerHTML;
+}
+
+function safeHtmlFromRichHtml(html) {
+  const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
+  return sanitizeRichDocument(parsed);
+}
+
+function safeHtmlFromMarkdown(markdown) {
+  const prepared = protectMathMarkup(protectOwnPairs(markdown));
+  const parsed = new DOMParser().parseFromString(marked.parse(prepared, {
+    gfm: true,
+    breaks: false,
+  }), "text/html");
+  return sanitizeRichDocument(parsed);
+}
+
+function collectMarkdownTableTokens(tokens, output = []) {
+  for (const token of tokens || []) {
+    if (token?.type === "table") output.push(token);
+    if (Array.isArray(token?.tokens)) collectMarkdownTableTokens(token.tokens, output);
+    for (const item of token?.items || []) collectMarkdownTableTokens(item.tokens, output);
+  }
+  return output;
+}
+
+export function markdownTableInfo(markdown) {
+  try {
+    const tables = collectMarkdownTableTokens(marked.lexer(String(markdown || ""), { gfm: true }));
+    const dimensions = tables.map((table) => ({
+      rows: 1 + (table.rows?.length || 0),
+      columns: table.header?.length || 0,
+    }));
+    return {
+      hasTable: Boolean(tables.length),
+      oversized: dimensions.some(({ rows, columns }) => rows > MAX_TABLE_ROWS || columns > MAX_TABLE_COLUMNS),
+      tableCount: tables.length,
+      maxRows: Math.max(0, ...dimensions.map(({ rows }) => rows)),
+      maxColumns: Math.max(0, ...dimensions.map(({ columns }) => columns)),
+    };
+  } catch {
+    return {
+      hasTable: false,
+      oversized: false,
+      tableCount: 0,
+      maxRows: 0,
+      maxColumns: 0,
+    };
+  }
+}
+
+function richBodyTableInfo(value) {
+  const dimensions = [];
+  const visit = (node) => {
+    if (node?.type === "table") {
+      dimensions.push({
+        rows: node.content?.length || 0,
+        columns: Math.max(0, ...(node.content || []).map((row) => (
+          (row.content || []).reduce((count, cell) => count + (Number(cell.attrs?.colspan) || 1), 0)
+        ))),
+      });
+    }
+    for (const child of node?.content || []) visit(child);
+  };
+  visit(value);
+  return {
+    hasTable: Boolean(dimensions.length),
+    oversized: dimensions.some(({ rows, columns }) => rows > MAX_TABLE_ROWS || columns > MAX_TABLE_COLUMNS),
+  };
+}
+
+function plainTextRichBody(value) {
+  const lines = String(value || "").replace(/\r\n?/g, "\n").split("\n");
+  return {
+    type: "doc",
+    content: lines.map((line) => ({
+      type: "paragraph",
+      ...(line ? { content: [{ type: "text", text: line }] } : {}),
+    })),
+  };
 }
 
 function marksWithStyle(marks, state) {
@@ -631,12 +774,110 @@ function applyStyleSentinels(value) {
 
 export function richBodyFromLegacyMarkdown(markdown, options = {}) {
   if (!String(markdown || "").trim()) return emptyRichBody();
-  const value = applyStyleSentinels(generateJSON(
-    safeHtmlFromMarkdown(markdown),
-    createEditorExtensions(options),
-  ));
-  const migrated = migrateMathInRichBody(value);
-  return normalizeRichBody(migrated.richBody) || emptyRichBody();
+  if (markdownTableInfo(markdown).oversized) return plainTextRichBody(markdown);
+  try {
+    const value = applyStyleSentinels(generateJSON(
+      safeHtmlFromMarkdown(markdown),
+      createEditorExtensions(options),
+    ));
+    if (richBodyTableInfo(value).oversized) return plainTextRichBody(markdown);
+    const migrated = migrateMathInRichBody(value);
+    return normalizeRichBody(migrated.richBody) || plainTextRichBody(markdown);
+  } catch {
+    return plainTextRichBody(markdown);
+  }
+}
+
+export function richBodyFromHtml(html, options = {}) {
+  if (!String(html || "").trim()) return null;
+  try {
+    const value = generateJSON(
+      safeHtmlFromRichHtml(html),
+      createEditorExtensions(options),
+    );
+    if (richBodyTableInfo(value).oversized) return null;
+    const migrated = migrateMathInRichBody(value);
+    return normalizeRichBody(migrated.richBody);
+  } catch {
+    return null;
+  }
+}
+
+function paragraphMarkdownLine(node) {
+  if (node?.type !== "paragraph") return null;
+  let value = "";
+  for (const child of node.content || []) {
+    if (child.type !== "text") return null;
+    value += child.text || "";
+  }
+  return value;
+}
+
+function singleMarkdownTable(value) {
+  try {
+    const tokens = marked.lexer(String(value || ""), { gfm: true }).filter((token) => token.type !== "space");
+    if (tokens.length !== 1 || tokens[0].type !== "table") return false;
+    return tokens[0].raw.trim() === String(value || "").trim();
+  } catch {
+    return false;
+  }
+}
+
+export function migrateRichBodyTables(value, options = {}) {
+  const source = normalizeRichBody(value);
+  if (!source) return { richBody: null, changed: false };
+  let changed = false;
+  const rewrite = (node) => {
+    if (!node.content) return node;
+    const rewrittenChildren = node.content.map(rewrite);
+    if (!["doc", "blockquote", "listItem", "taskItem"].includes(node.type)) {
+      return { ...node, content: rewrittenChildren };
+    }
+    const content = [];
+    for (let index = 0; index < rewrittenChildren.length;) {
+      const first = paragraphMarkdownLine(rewrittenChildren[index]);
+      const second = paragraphMarkdownLine(rewrittenChildren[index + 1]);
+      if (!first?.includes("|") || !second?.includes("|")) {
+        content.push(rewrittenChildren[index]);
+        index += 1;
+        continue;
+      }
+      const lines = [];
+      let end = index;
+      while (end < rewrittenChildren.length) {
+        const line = paragraphMarkdownLine(rewrittenChildren[end]);
+        if (line === null || !line.includes("|") || !line.trim()) break;
+        lines.push(line);
+        end += 1;
+      }
+      let replacement = null;
+      let consumed = 0;
+      for (let count = lines.length; count >= 2; count -= 1) {
+        const candidate = lines.slice(0, count).join("\n");
+        const info = markdownTableInfo(candidate);
+        if (!info.hasTable || info.oversized || !singleMarkdownTable(candidate)) continue;
+        const converted = richBodyFromLegacyMarkdown(candidate, options);
+        if (converted.content?.length !== 1 || converted.content[0].type !== "table") continue;
+        [replacement] = converted.content;
+        consumed = count;
+        break;
+      }
+      if (!replacement) {
+        content.push(rewrittenChildren[index]);
+        index += 1;
+        continue;
+      }
+      content.push(replacement);
+      index += consumed;
+      changed = true;
+    }
+    return { ...node, content };
+  };
+  const richBody = rewrite(source);
+  return {
+    richBody: normalizeRichBody(richBody) || source,
+    changed,
+  };
 }
 
 export function migrateRichBodyMath(value) {
@@ -667,6 +908,25 @@ export function clipboardTextFromSlice(slice) {
     const tail = output.at(-1) || "";
     if (!tail.endsWith("\n")) output.push("\n");
   };
+  const tableCellText = (node) => {
+    const cellOutput = [];
+    const visitCell = (child) => {
+      const type = child.type?.name;
+      if (child.isText) cellOutput.push(child.text || "");
+      else if (type === "hardBreak") cellOutput.push("\n");
+      else if (type === "inlineMath") cellOutput.push(`$${String(child.attrs?.latex || "").trim()}$`);
+      else if (type === "blockMath") cellOutput.push(`$$\n${String(child.attrs?.latex || "").trim()}\n$$`);
+      else {
+        child.forEach?.((nested) => visitCell(nested));
+        if (["paragraph", "heading", "blockquote", "listItem", "taskItem", "codeBlock"].includes(type)) {
+          const tail = cellOutput.at(-1) || "";
+          if (!tail.endsWith("\n")) cellOutput.push("\n");
+        }
+      }
+    };
+    node.forEach?.((child) => visitCell(child));
+    return cellOutput.join("").replace(/\n{3,}/g, "\n\n").trimEnd();
+  };
   const visit = (node) => {
     const type = node.type?.name;
     if (node.isText) append(node.text || "");
@@ -675,6 +935,13 @@ export function clipboardTextFromSlice(slice) {
     else if (type === "blockMath") {
       append(`$$\n${String(node.attrs?.latex || "").trim()}\n$$`);
       endBlock();
+    } else if (type === "table") {
+      node.forEach?.((row) => {
+        const cells = [];
+        row.forEach?.((cell) => cells.push(tableCellText(cell)));
+        append(cells.join("\t"));
+        endBlock();
+      });
     } else {
       node.forEach?.((child) => visit(child));
       if (["paragraph", "heading", "blockquote", "listItem", "taskItem", "codeBlock"].includes(type)) endBlock();
@@ -682,6 +949,23 @@ export function clipboardTextFromSlice(slice) {
   };
   slice?.content?.forEach((node) => visit(node));
   return output.join("").replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
+function selectedTableHasHeaderRow(editor) {
+  const $from = editor?.state?.selection?.$from;
+  if (!$from) return false;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const node = $from.node(depth);
+    if (node.type.name !== "table") continue;
+    const firstRow = node.firstChild;
+    if (!firstRow?.childCount) return false;
+    let allHeaders = true;
+    firstRow.forEach((cell) => {
+      if (cell.type.name !== "tableHeader") allHeaders = false;
+    });
+    return allHeaders;
+  }
+  return false;
 }
 
 export function formatStateForEditor(editor, painterActive = false) {
@@ -698,6 +982,12 @@ export function formatStateForEditor(editor, painterActive = false) {
       block: "paragraph",
       canClear: false,
       painterActive,
+      inTable: false,
+      tableHasHeader: false,
+      tableRows: 0,
+      tableColumns: 0,
+      canAddTableRow: false,
+      canAddTableColumn: false,
     };
   }
   const textStyle = editor.getAttributes("textStyle");
@@ -713,6 +1003,7 @@ export function formatStateForEditor(editor, painterActive = false) {
               : editor.isActive("bulletList") ? "bullet"
                 : editor.isActive("orderedList") ? "numbered"
                   : "paragraph";
+  const tableDimensions = selectedTableDimensions(editor);
   return {
     bold: editor.isActive("bold"),
     italic: editor.isActive("italic"),
@@ -725,5 +1016,11 @@ export function formatStateForEditor(editor, painterActive = false) {
     block,
     canClear: !editor.state.selection.empty,
     painterActive,
+    inTable: editor.isActive("table"),
+    tableHasHeader: selectedTableHasHeaderRow(editor),
+    tableRows: tableDimensions.rows,
+    tableColumns: tableDimensions.columns,
+    canAddTableRow: tableDimensions.rows > 0 && tableDimensions.rows < MAX_TABLE_ROWS,
+    canAddTableColumn: tableDimensions.columns > 0 && tableDimensions.columns < MAX_TABLE_COLUMNS,
   };
 }

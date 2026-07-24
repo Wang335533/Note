@@ -148,6 +148,12 @@ function NoteEditorPane({ note, notebooks, folders, state, mutate, navigate, sho
     block: "paragraph",
     canClear: false,
     painterActive: false,
+    inTable: false,
+    tableHasHeader: false,
+    tableRows: 0,
+    tableColumns: 0,
+    canAddTableRow: false,
+    canAddTableColumn: false,
   });
   const [imageBusy, setImageBusy] = useState(false);
   const editorRef = useRef(null);

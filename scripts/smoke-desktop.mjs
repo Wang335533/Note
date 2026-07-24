@@ -15,6 +15,13 @@ const executable = requestedExecutable
   || path.join(projectRoot, "node_modules", "electron", "dist", "electron.exe");
 const args = requestedExecutable ? [] : [projectRoot];
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const tableMarkdownFixture = [
+  "| Panel | 理论问题 | 推荐调节变量 | 预期交互方向 |",
+  "|---|---|---|---|",
+  "| A. 替代性信息供给 | 市场是否已有其他渠道回答类似问题 | Analyst Coverage; Management Guidance Frequency | 负 |",
+  "| B. 信息不确定性 | 新分析框架是否更有价值 | Forecast Dispersion; Strategic Differentiation | 正 |",
+  "| C. 专业处理 | 新信息能否被投资者吸收 | Participation Quantity; Research-intensive Participant Share | 正 |",
+].join("\n");
 
 async function reservePort() {
   const server = net.createServer();
@@ -244,12 +251,64 @@ try {
     throw new Error(`Unexpected legacy migration state: ${JSON.stringify(legacyMigration)}`);
   }
 
+  const rawTableCreated = await evaluate(cdp.send, `(async () => {
+    const result = await window.noteDesktop.mutate({
+      type: 'note:add',
+      title: 'Raw table migration',
+      richBody: {
+        type: 'doc',
+        content: ${JSON.stringify(tableMarkdownFixture.split("\n"))}.map((text) => ({
+          type: 'paragraph',
+          content: [{ type: 'text', text }],
+        })),
+      },
+    });
+    return {
+      ok: result?.ok,
+      id: result?.state?.settings?.notesLastNoteId || null,
+    };
+  })()`);
+  if (!rawTableCreated?.ok || !rawTableCreated.id) {
+    throw new Error(`Could not create the raw table migration fixture: ${JSON.stringify(rawTableCreated)}`);
+  }
+  const rawTableMigration = await waitFor(
+    cdp.send,
+    `(() => {
+      const table = document.querySelector('.rich-note-prosemirror table');
+      if (!table || table.rows.length !== 4 || table.querySelectorAll('th').length !== 4) return null;
+      return {
+        rows: table.rows.length,
+        columns: table.rows[0]?.cells.length || 0,
+        rawDelimiterVisible: document.querySelector('.rich-note-prosemirror')?.textContent.includes('|---|'),
+      };
+    })()`,
+    "the existing raw Markdown table migration",
+  );
+  const rawTableMigrationPersistence = await waitForValue(async () => {
+    const persisted = JSON.parse(await fs.readFile(smokeStatePath, "utf8"));
+    const table = persisted.notes?.[rawTableCreated.id]?.richBody?.content?.find((node) => node.type === "table");
+    if (!table) return null;
+    return {
+      rows: table.content.length,
+      columns: table.content[0]?.content?.length || 0,
+      firstCellType: table.content[0]?.content?.[0]?.type,
+    };
+  }, "the migrated raw table to reach disk");
+  if (rawTableMigration.rawDelimiterVisible || rawTableMigrationPersistence.firstCellType !== "tableHeader") {
+    throw new Error(`Unexpected raw table migration: ${JSON.stringify({ rawTableMigration, rawTableMigrationPersistence })}`);
+  }
+
   await evaluate(cdp.send, `document.querySelector('button[aria-label="新建笔记"]')?.click()`);
   await waitFor(
     cdp.send,
     `Boolean(document.querySelector('.rich-note-prosemirror[contenteditable="true"]'))`,
     "the rich note editor",
   );
+  const richNoteId = await evaluate(cdp.send, `(async () => {
+    const result = await window.noteDesktop.getState();
+    return result?.state?.settings?.notesLastNoteId || null;
+  })()`);
+  if (!richNoteId) throw new Error("Could not identify the rich-note smoke fixture");
   await evaluate(cdp.send, `(() => {
     const editor = document.querySelector('.rich-note-prosemirror');
     editor.focus();
@@ -419,6 +478,180 @@ try {
     throw new Error(`Unexpected formula editor state: ${JSON.stringify(formulaEditor)}`);
   }
 
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    const clipboard = new DataTransfer();
+    clipboard.setData('text/plain', ${JSON.stringify(tableMarkdownFixture)});
+    editor.dispatchEvent(new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: clipboard,
+    }));
+  })()`);
+  const pastedTable = await waitFor(
+    cdp.send,
+    `(() => {
+      const table = document.querySelector('.rich-note-prosemirror table');
+      if (!table || table.rows.length !== 4 || table.querySelectorAll('th').length !== 4) return null;
+      return {
+        rows: table.rows.length,
+        columns: table.rows[0]?.cells.length || 0,
+        headers: table.querySelectorAll('th').length,
+        rawPipesVisible: table.textContent.includes('|---|'),
+        wrapperScrollable: getComputedStyle(table.closest('.tableWrapper')).overflowX,
+      };
+    })()`,
+    "the pasted editable Markdown table",
+  );
+  if (pastedTable.columns !== 4 || pastedTable.rawPipesVisible || pastedTable.wrapperScrollable !== "auto") {
+    throw new Error(`Unexpected pasted table: ${JSON.stringify(pastedTable)}`);
+  }
+
+  await evaluate(cdp.send, `(() => {
+    const cell = document.querySelector('.rich-note-prosemirror table tbody tr:nth-child(2) td');
+    const paragraph = cell?.querySelector('p');
+    if (!paragraph) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    paragraph.closest('[contenteditable="true"]')?.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    return true;
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.table-context-toolbar'))`, "the contextual table toolbar");
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="在下方添加行"]')?.click()`);
+  await waitFor(cdp.send, `document.querySelector('.rich-note-prosemirror table')?.rows.length === 5`, "an added table row");
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="删除当前行"]')?.click()`);
+  await waitFor(cdp.send, `document.querySelector('.rich-note-prosemirror table')?.rows.length === 4`, "a deleted table row");
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="在右侧添加列"]')?.click()`);
+  await waitFor(cdp.send, `document.querySelector('.rich-note-prosemirror table tbody tr')?.cells.length === 5`, "an added table column");
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="删除当前列"]')?.click()`);
+  await waitFor(cdp.send, `document.querySelector('.rich-note-prosemirror table tbody tr')?.cells.length === 4`, "a deleted table column");
+  await evaluate(cdp.send, `document.querySelector('.table-context-toolbar button[aria-pressed]')?.click()`);
+  await waitFor(cdp.send, `document.querySelectorAll('.rich-note-prosemirror table th').length === 0`, "the disabled table header");
+  await evaluate(cdp.send, `document.querySelector('.table-context-toolbar button[aria-pressed]')?.click()`);
+  await waitFor(cdp.send, `document.querySelectorAll('.rich-note-prosemirror table th').length === 4`, "the restored table header");
+
+  const tablePersistence = await waitForValue(async () => {
+    const persisted = JSON.parse(await fs.readFile(smokeStatePath, "utf8"));
+    const findTable = (node) => {
+      if (node?.type === "table") return node;
+      for (const child of node?.content || []) {
+        const table = findTable(child);
+        if (table) return table;
+      }
+      return null;
+    };
+    const note = persisted.notes?.[richNoteId];
+    const table = findTable(note?.richBody);
+    if (!table) return null;
+    return {
+      rows: table.content.length,
+      columns: table.content[0]?.content?.length || 0,
+      firstCellType: table.content[0]?.content?.[0]?.type,
+      markdownHasDelimiter: /\|\s*:?-{3}/.test(note.body),
+    };
+  }, "the editable table to reach disk");
+  if (
+    tablePersistence.rows !== 4
+    || tablePersistence.columns !== 4
+    || tablePersistence.firstCellType !== "tableHeader"
+    || !tablePersistence.markdownHasDelimiter
+  ) {
+    throw new Error(`Unexpected persisted table: ${JSON.stringify(tablePersistence)}`);
+  }
+
+  await evaluate(cdp.send, "location.reload()");
+  const reopenedPastedTable = await waitFor(
+    cdp.send,
+    `(() => {
+      const table = document.querySelector('.rich-note-prosemirror table');
+      if (!table || table.rows.length !== 4 || !table.textContent.includes('推荐调节变量')) return null;
+      return { rows: table.rows.length, columns: table.rows[0]?.cells.length || 0 };
+    })()`,
+    "the pasted table after a renderer reload",
+  );
+
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="新建笔记"]')?.click()`);
+  await waitFor(
+    cdp.send,
+    `Boolean(document.querySelector('.rich-note-prosemirror[contenteditable="true"]')) && !document.querySelector('.rich-note-prosemirror table')`,
+    "a blank note for the table grid",
+  );
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="插入表格"]')?.click()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.table-grid-popover'))`, "the table size grid");
+  await evaluate(cdp.send, `document.querySelector('.table-grid-picker button[aria-label="3 行 4 列"]')?.click()`);
+  const gridTable = await waitFor(
+    cdp.send,
+    `(() => {
+      const table = document.querySelector('.rich-note-prosemirror table');
+      if (!table || table.rows.length !== 3 || table.rows[0]?.cells.length !== 4) return null;
+      return {
+        rows: table.rows.length,
+        columns: table.rows[0].cells.length,
+        headers: table.querySelectorAll('th').length,
+      };
+    })()`,
+    "a table inserted from the size grid",
+  );
+  await evaluate(cdp.send, `(() => {
+    const table = document.querySelector('.rich-note-prosemirror table');
+    const paragraph = table?.rows[table.rows.length - 1]?.cells[table.rows[0].cells.length - 1]?.querySelector('p');
+    const editor = document.querySelector('.rich-note-prosemirror');
+    if (!paragraph || !editor) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    editor.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Tab',
+      code: 'Tab',
+      bubbles: true,
+      cancelable: true,
+    }));
+    return true;
+  })()`);
+  const tabAddedRow = await waitFor(
+    cdp.send,
+    `document.querySelector('.rich-note-prosemirror table')?.rows.length === 4`,
+    "Tab to add a final table row",
+  );
+  const gridTablePersistence = await waitForValue(async () => {
+    const persisted = JSON.parse(await fs.readFile(smokeStatePath, "utf8"));
+    const note = persisted.notes?.[persisted.settings?.notesLastNoteId];
+    const table = note?.richBody?.content?.find((node) => node.type === "table");
+    if (!table || table.content.length !== 4) return null;
+    return {
+      noteId: note.id,
+      rows: table.content.length,
+      columns: table.content[0]?.content?.length || 0,
+    };
+  }, "the grid-created table to reach disk");
+  await evaluate(cdp.send, "location.reload()");
+  const reopenedGridTable = await waitFor(
+    cdp.send,
+    `(() => {
+      const table = document.querySelector('.rich-note-prosemirror table');
+      if (!table || table.rows.length !== 4 || table.rows[0]?.cells.length !== 4) return null;
+      return { rows: table.rows.length, columns: table.rows[0].cells.length };
+    })()`,
+    "the grid-created table after a renderer reload",
+  );
+
   if (cdp.exceptions.length) throw new Error(`Renderer exceptions: ${cdp.exceptions.join(" | ")}`);
   console.log(JSON.stringify({
     ok: true,
@@ -428,6 +661,8 @@ try {
     restoreResult,
     legacyMigration,
     legacyPersistence,
+    rawTableMigration,
+    rawTableMigrationPersistence,
     richEditor,
     basePlatformFonts,
     platformFonts,
@@ -435,6 +670,13 @@ try {
     decreasedFontSize,
     lineHeightEditor,
     formulaEditor,
+    pastedTable,
+    tablePersistence,
+    reopenedPastedTable,
+    gridTable,
+    tabAddedRow,
+    gridTablePersistence,
+    reopenedGridTable,
   }, null, 2));
 } catch (error) {
   if (processOutput.trim()) console.error(processOutput.trim());
