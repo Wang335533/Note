@@ -237,11 +237,38 @@ select:focus-visible {
   justify-self: end;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 7px;
+  min-width: 0;
+}
+
+.header-context-actions,
+.window-control-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.window-control-group {
+  -webkit-app-region: drag;
 }
 
 .window-maximize-button {
   color: #8b857e;
+}
+
+.window-close-button {
+  color: #8b857e;
+}
+
+.window-close-button:hover {
+  color: #fff;
+  background: #c7473d;
+  box-shadow: 0 4px 12px rgba(160, 43, 36, 0.2);
+}
+
+.window-close-button:active {
+  color: #fff;
+  background: #ad332c;
 }
 
 .note-create-button {
@@ -1490,6 +1517,43 @@ kbd {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
+  }
+}
+
+@media (max-width: 470px) {
+  .app-header {
+    padding-right: 14px;
+    padding-left: 18px;
+    grid-template-columns: minmax(32px, 1fr) auto minmax(32px, 1fr);
+  }
+
+  .wordmark {
+    width: 28px;
+    justify-content: center;
+  }
+
+  .wordmark span {
+    display: none;
+  }
+
+  .header-tools {
+    gap: 4px;
+  }
+
+  .header-context-actions,
+  .window-control-group {
+    gap: 2px;
+  }
+
+  .window-grip {
+    display: none;
+  }
+
+  .header-context-actions .icon-button,
+  .window-control-group .icon-button {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
   }
 }
 
