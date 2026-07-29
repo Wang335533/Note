@@ -205,6 +205,34 @@ try {
     throw new Error(`Unexpected Todo workspace state: ${JSON.stringify(todo)}`);
   }
 
+  const closeControl = await waitFor(
+    cdp.send,
+    `(() => {
+      const button = document.querySelector('button[aria-label="关闭 Note"]');
+      if (!button) return null;
+      const rect = button.getBoundingClientRect();
+      const buttonRights = [...document.querySelectorAll('.header-tools button')]
+        .map((item) => item.getBoundingClientRect().right);
+      return {
+        title: button.getAttribute('title'),
+        width: rect.width,
+        height: rect.height,
+        rightmost: Math.abs(rect.right - Math.max(...buttonRights)) < 0.5,
+        appRegion: getComputedStyle(button).getPropertyValue('-webkit-app-region'),
+      };
+    })()`,
+    "the custom title-bar close control",
+  );
+  if (
+    closeControl.title !== "关闭 Note"
+    || closeControl.width < 28
+    || closeControl.height < 28
+    || !closeControl.rightmost
+    || closeControl.appRegion !== "no-drag"
+  ) {
+    throw new Error(`Unexpected close control geometry: ${JSON.stringify(closeControl)}`);
+  }
+
   const maximizeResult = await evaluate(cdp.send, `window.noteDesktop.toggleMaximize()`);
   if (!maximizeResult?.ok) throw new Error(`Could not maximize the desktop window: ${JSON.stringify(maximizeResult)}`);
   await waitFor(
@@ -1086,10 +1114,29 @@ try {
   );
 
   if (cdp.exceptions.length) throw new Error(`Renderer exceptions: ${cdp.exceptions.join(" | ")}`);
+  const childExit = once(child, "exit").then(([code, signal]) => ({ code, signal }));
+  const closeClicked = await evaluate(
+    cdp.send,
+    `(() => {
+      const button = document.querySelector('button[aria-label="关闭 Note"]');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`,
+  );
+  const closedViaHeaderControl = closeClicked
+    ? await Promise.race([childExit, delay(15_000).then(() => null)])
+    : null;
+  if (!closedViaHeaderControl || closedViaHeaderControl.code !== 0) {
+    throw new Error(`Header close control did not exit cleanly: ${JSON.stringify(closedViaHeaderControl)}`);
+  }
+
   console.log(JSON.stringify({
     ok: true,
     todo,
     notes,
+    closeControl,
+    closedViaHeaderControl,
     maximizeResult,
     restoreResult,
     legacyMigration,
@@ -1128,14 +1175,18 @@ try {
   throw error;
 } finally {
   if (cdp) {
-    try {
-      await Promise.race([cdp.send("Browser.close"), delay(500)]);
-    } catch {
-      // The process may already be closing.
+    if (child.exitCode === null) {
+      try {
+        await Promise.race([cdp.send("Browser.close"), delay(500)]);
+      } catch {
+        // The process may already be closing.
+      }
     }
     cdp.socket.close();
   }
-  await Promise.race([once(child, "exit"), delay(5_000)]).catch(() => {});
+  if (child.exitCode === null) {
+    await Promise.race([once(child, "exit"), delay(5_000)]).catch(() => {});
+  }
   if (child.exitCode === null) child.kill();
   await delay(250);
   await fs.rm(temporaryRoot, { recursive: true, force: true });

@@ -380,6 +380,7 @@ export function createBrowserApi(browserWindow, {
     setLocked: (locked) => mutate({ type: "settings:set", key: "locked", value: locked }),
     setLaunchAtLogin: (enabled) => mutate({ type: "settings:set", key: "launchAtLogin", value: enabled }),
     toggleMaximize: async () => ({ ok: false, error: "浏览器预览不支持窗口最大化" }),
+    closeWindow: async () => ({ ok: false, error: "浏览器预览不支持关闭桌面窗口" }),
     quitReady: async () => ({ ok: true }),
     onState: (listener) => { stateListeners.add(listener); return () => stateListeners.delete(listener); },
     onSaveStatus: (listener) => { saveListeners.add(listener); return () => saveListeners.delete(listener); },

@@ -144,3 +144,17 @@ test("reference fixture contains only visible tasks", () => {
   assert.equal(tasks.length, 5);
   assert.equal(tasks.some((task) => Object.hasOwn(task, "hidden")), false);
 });
+
+test("browser preview keeps desktop window lifecycle controls inert", async () => {
+  const now = new Date(2026, 6, 14, 14, 0, 0);
+  const browserApi = createBrowserApi(fakeBrowserWindow(createInitialState(now)), { now: () => now });
+
+  assert.deepEqual(await browserApi.toggleMaximize(), {
+    ok: false,
+    error: "浏览器预览不支持窗口最大化",
+  });
+  assert.deepEqual(await browserApi.closeWindow(), {
+    ok: false,
+    error: "浏览器预览不支持关闭桌面窗口",
+  });
+});

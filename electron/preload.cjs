@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("noteDesktop", {
   setLocked: (locked) => ipcRenderer.invoke("note:set-locked", locked),
   setLaunchAtLogin: (enabled) => ipcRenderer.invoke("note:set-launch-at-login", enabled),
   toggleMaximize: () => ipcRenderer.invoke("note:toggle-maximize"),
+  closeWindow: () => ipcRenderer.invoke("note:close-window"),
   quitReady: () => ipcRenderer.invoke("note:quit-ready"),
   onState: (callback) => {
     const handler = (_event, payload) => callback(payload);

@@ -1196,6 +1196,13 @@ function registerIpc() {
     }
     return { ok: true, maximized: mainWindow.isMaximized() };
   });
+  handleTrustedIpc("note:close-window", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: "窗口不可用" };
+    setImmediate(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+    });
+    return { ok: true };
+  });
   handleTrustedIpc("note:quit-ready", () => {
     beginQuitFlush();
     return { ok: true };

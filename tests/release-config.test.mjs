@@ -32,8 +32,8 @@ test("browser preview prebundles every shared CommonJS entry", () => {
   }
 });
 
-test("2.6.0 keeps the stable Windows installation identity used by earlier notes", () => {
-  assert.equal(packageJson.version, "2.6.0");
+test("2.6.1 keeps the stable Windows installation identity used by earlier notes", () => {
+  assert.equal(packageJson.version, "2.6.1");
   assert.equal(packageJson.name, "desktop-note");
   assert.equal(packageJson.build?.appId, "local.desktop.note");
   assert.equal(packageJson.build?.productName, "Note");

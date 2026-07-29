@@ -1040,40 +1040,55 @@ export function App() {
             </button>
           </div>
           <div className="header-tools">
-            <div className="window-grip" title="拖动窗口">
-              <DotsSixVertical size={20} weight="bold" aria-hidden="true" />
+            <div className="header-context-actions">
+              {activeModule === "todo" ? (
+                <button
+                  type="button"
+                  className="icon-button clear-button"
+                  aria-label="清空今天已完成的任务"
+                  disabled={!completedCount}
+                  onClick={() => setClearConfirm(true)}
+                >
+                  <Trash size={22} />
+                </button>
+              ) : (
+                <>
+                  <button type="button" className="icon-button" aria-label="搜索全部内容" onClick={() => setSearchOpen(true)}>
+                    <MagnifyingGlass size={19} />
+                  </button>
+                  <button type="button" className="icon-button note-create-button" aria-label="新建笔记" onClick={() => void createBlankNote()}>
+                    <NoteBlank size={20} />
+                  </button>
+                </>
+              )}
             </div>
-            {isDesktop ? (
-              <button
-                type="button"
-                className="icon-button window-maximize-button"
-                aria-label={state.runtime?.isMaximized ? "还原窗口" : "最大化窗口"}
-                title={state.runtime?.isMaximized ? "还原窗口" : "最大化窗口"}
-                onClick={() => void noteApi.toggleMaximize?.()}
-              >
-                {state.runtime?.isMaximized ? <ArrowsInSimple size={17} /> : <ArrowsOutSimple size={17} />}
-              </button>
-            ) : null}
-            {activeModule === "todo" ? (
-              <button
-                type="button"
-                className="icon-button clear-button"
-                aria-label="清空今天已完成的任务"
-                disabled={!completedCount}
-                onClick={() => setClearConfirm(true)}
-              >
-                <Trash size={22} />
-              </button>
-            ) : (
-              <>
-                <button type="button" className="icon-button" aria-label="搜索全部内容" onClick={() => setSearchOpen(true)}>
-                  <MagnifyingGlass size={19} />
-                </button>
-                <button type="button" className="icon-button note-create-button" aria-label="新建笔记" onClick={() => void createBlankNote()}>
-                  <NoteBlank size={20} />
-                </button>
-              </>
-            )}
+            <div className="window-control-group">
+              <div className="window-grip" title="拖动窗口">
+                <DotsSixVertical size={20} weight="bold" aria-hidden="true" />
+              </div>
+              {isDesktop ? (
+                <>
+                  <button
+                    type="button"
+                    className="icon-button window-maximize-button"
+                    aria-label={state.runtime?.isMaximized ? "还原窗口" : "最大化窗口"}
+                    title={state.runtime?.isMaximized ? "还原窗口" : "最大化窗口"}
+                    onClick={() => void noteApi.toggleMaximize?.()}
+                  >
+                    {state.runtime?.isMaximized ? <ArrowsInSimple size={17} /> : <ArrowsOutSimple size={17} />}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button window-close-button"
+                    aria-label="关闭 Note"
+                    title="关闭 Note"
+                    onClick={() => void noteApi.closeWindow?.()}
+                  >
+                    <X size={18} />
+                  </button>
+                </>
+              ) : null}
+            </div>
           </div>
         </header>
 

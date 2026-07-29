@@ -4,6 +4,7 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 const packageJson = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
+const packageLock = JSON.parse(await readFile(new URL("package-lock.json", root), "utf8"));
 const gitignore = await readFile(new URL(".gitignore", root), "utf8");
 const ci = await readFile(new URL(".github/workflows/ci.yml", root), "utf8");
 const release = await readFile(new URL(".github/workflows/release.yml", root), "utf8");
@@ -20,6 +21,17 @@ test("known vulnerable development dependencies stay on patched versions", () =>
   assert.equal(packageJson.devDependencies?.["@phosphor-icons/core"], "2.1.1");
   assert.equal(packageJson.devDependencies?.vite, "6.4.3");
   assert.equal(packageJson.overrides?.["shell-quote"], "1.10.0");
+  assert.equal(packageLock.packages?.["node_modules/postcss"]?.version, "8.5.25");
+  assert.equal(packageLock.packages?.["node_modules/tar"]?.version, "7.5.22");
+  assert.equal(packageLock.packages?.["node_modules/brace-expansion"]?.version, "5.0.8");
+  assert.equal(
+    packageLock.packages?.["node_modules/@electron/asar/node_modules/brace-expansion"]?.version,
+    "1.1.17",
+  );
+  assert.equal(
+    packageLock.packages?.["node_modules/@electron/universal/node_modules/brace-expansion"]?.version,
+    "2.1.3",
+  );
 });
 
 test("CI uses locked dependencies with read-only repository access", () => {
