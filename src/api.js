@@ -1,9 +1,12 @@
 import storeModule from "desktop-note/store";
 import {
   createLibraryExportPlan,
+  createNoteExportPlan,
   deriveImportedTitle,
+  encodeMarkdownPath,
   imageExtension,
   noteAssetUrl,
+  safeFileSegment,
 } from "desktop-note/library-files";
 const {
   SCHEMA_VERSION,
@@ -349,6 +352,24 @@ export function createBrowserApi(browserWindow, {
     return { ok: true, noteCount: plan.notes.length, adapted: true };
   }
 
+  async function exportNote(noteId) {
+    if (!browserWindow.document || !browserWindow.Blob || !browserWindow.URL) {
+      return { ok: false, error: "当前预览环境无法导出" };
+    }
+    const note = state.notes?.[noteId];
+    if (!note || note.trashedAt) return { ok: false, error: "未找到可导出的笔记" };
+    const fileStem = safeFileSegment(note.title || deriveImportedTitle("", note.body), "无标题");
+    const plan = createNoteExportPlan(note, `${fileStem}.assets`);
+    let content = plan.content;
+    for (const asset of plan.assets) {
+      const flatAssetName = asset.relativePath.replaceAll("/", "__");
+      content = content.split(encodeMarkdownPath(asset.relativePath)).join(encodeMarkdownPath(flatAssetName));
+      if (assetData[asset.attachmentId]) downloadHref(assetData[asset.attachmentId], flatAssetName);
+    }
+    downloadText(content, `${fileStem}.md`);
+    return { ok: true, assetCount: plan.assets.length, adapted: Boolean(plan.assets.length) };
+  }
+
   return {
     getState: async () => ({ ok: true, state: structuredClone(state) }),
     mutate,
@@ -361,6 +382,7 @@ export function createBrowserApi(browserWindow, {
     addNoteImage,
     getAssetUrl: (id) => assetData[id] || "",
     exportLibrary,
+    exportNote,
     importMarkdown,
     exportMarkdown: async () => {
       if (!browserWindow.document || !browserWindow.Blob || !browserWindow.URL) {

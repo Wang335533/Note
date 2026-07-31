@@ -168,6 +168,14 @@ select:focus-visible {
   user-select: none;
 }
 
+.platform-darwin .wordmark {
+  margin-left: 58px;
+}
+
+.platform-darwin .window-grip {
+  display: none;
+}
+
 .module-switch {
   height: 31px;
   display: grid;
@@ -284,6 +292,12 @@ select:focus-visible {
   color: #77736d;
   cursor: grab;
   -webkit-app-region: drag;
+}
+
+@media (max-width: 500px) {
+  .platform-darwin .wordmark span {
+    display: none;
+  }
 }
 
 .icon-button {

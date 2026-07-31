@@ -23,14 +23,14 @@ test("known vulnerable development dependencies stay on patched versions", () =>
   assert.equal(packageJson.overrides?.["shell-quote"], "1.10.0");
   assert.equal(packageLock.packages?.["node_modules/postcss"]?.version, "8.5.25");
   assert.equal(packageLock.packages?.["node_modules/tar"]?.version, "7.5.22");
-  assert.equal(packageLock.packages?.["node_modules/brace-expansion"]?.version, "5.0.8");
+  assert.equal(packageLock.packages?.["node_modules/brace-expansion"]?.version, "5.0.9");
   assert.equal(
     packageLock.packages?.["node_modules/@electron/asar/node_modules/brace-expansion"]?.version,
-    "1.1.17",
+    "1.1.18",
   );
   assert.equal(
     packageLock.packages?.["node_modules/@electron/universal/node_modules/brace-expansion"]?.version,
-    "2.1.3",
+    "2.1.4",
   );
 });
 
@@ -39,22 +39,31 @@ test("CI uses locked dependencies with read-only repository access", () => {
   assert.match(ci, /actions\/checkout@[a-f0-9]{40}\s+# v6/);
   assert.match(ci, /actions\/setup-node@[a-f0-9]{40}\s+# v6/);
   assert.match(ci, /node-version: 24/);
+  assert.match(ci, /windows-latest/);
+  assert.match(ci, /macos-latest/);
   assert.match(ci, /npm ci/);
   assert.match(ci, /npm test/);
   assert.match(ci, /npm run build/);
 });
 
-test("tagged Windows releases are version-checked and published with a checksum", () => {
+test("tagged Windows and macOS releases are version-checked and published together", () => {
   assert.match(release, /tags:\s*\n\s*- ["']v\*\.\*\.\*["']/);
-  assert.match(release, /permissions:\s*\n\s*contents: write/);
+  assert.match(release, /permissions:\s*\n\s*contents: read/);
+  assert.match(release, /publish:[\s\S]*permissions:\s*\n\s*contents: write/);
   assert.match(release, /GITHUB_REF_NAME/);
   assert.match(release, /actions\/checkout@[a-f0-9]{40}\s+# v6/);
   assert.match(release, /actions\/setup-node@[a-f0-9]{40}\s+# v6/);
+  assert.match(release, /actions\/upload-artifact@[a-f0-9]{40}\s+# v4/);
+  assert.match(release, /actions\/download-artifact@[a-f0-9]{40}\s+# v4/);
   assert.match(release, /node-version: 24/);
   assert.match(release, /npm run package:installer/);
-  assert.match(release, /Get-FileHash/);
+  assert.match(release, /npm run package:mac/);
+  assert.match(release, /hdiutil verify/);
+  assert.match(release, /Note-\$\{version\}-setup\.exe/);
+  assert.match(release, /Note-\$\{version\}-mac-universal\.dmg/);
+  assert.match(release, /sha256sum/);
   assert.match(release, /SHA256SUMS\.txt/);
-  assert.match(release, /gh release create .*--draft/);
+  assert.match(release, /gh release create[\s\S]*--draft/);
   assert.match(release, /gh release edit .*--draft=false/);
   assert.match(release, /already published; immutable releases are never overwritten/);
 });

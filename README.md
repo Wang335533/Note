@@ -4,15 +4,19 @@
 [![Latest release](https://img.shields.io/github/v/release/Wang335533/Note?label=latest)](https://github.com/Wang335533/Note/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-6f6258.svg)](LICENSE)
 
-一个嵌在 Windows 桌面上的本地 Note 框架：`Todo` 保留“一页今日”的直接感，`Notes` 提供独立、长期、结构化的富文本笔记库。两者是同一应用中的同级模块，内容可以互相链接，但生命周期彼此独立。
+一个适配 Windows 与 macOS 的本地 Note：`Todo` 保留“一页今日”的直接感，`Notes` 提供独立、长期、结构化的富文本笔记库。两者是同一应用中的同级模块，内容可以互相链接，但生命周期彼此独立。
 
 ## 下载
 
-[下载最新 Windows 安装版](https://github.com/Wang335533/Note/releases/latest)。在 Release 页面选择 `Note-x.y.z-setup.exe`；`SHA256SUMS.txt` 可用于核对下载文件是否完整。
+[下载最新版本](https://github.com/Wang335533/Note/releases/latest)：
 
-Note 当前未使用商业代码签名证书，因此 Windows 首次运行时可能显示“未知发布者”或 SmartScreen 提示。安装包由本仓库的 GitHub Actions 从对应版本源码自动构建。
+- Windows：`Note-x.y.z-setup.exe`
+- macOS（Intel 与 Apple Silicon 通用）：`Note-x.y.z-mac-universal.dmg`
+- `SHA256SUMS.txt`：同时核对两个安装文件是否完整
 
-安装新版本时直接覆盖旧版本即可。Todo、笔记正文、图片和设置保存在 Windows 用户数据目录，不在安装目录中；升级不会创建一套全新的 Note。升级前仍会保留最近一个兼容性快照，便于异常时恢复。
+Note 当前没有商业代码签名证书。Windows 首次运行时可能显示“未知发布者”或 SmartScreen 提示；macOS 版使用临时签名、未经过 Apple 公证，首次打开若被拦截，请进入“系统设置 → 隐私与安全性”，在安全提示处选择“仍要打开”。两个安装包均由本仓库的 GitHub Actions 从同一个版本标签自动构建。
+
+同一系统上安装新版本时直接覆盖旧版本即可。Todo、笔记正文、图片和设置保存在当前系统用户的数据目录，不在安装目录中；升级不会创建一套全新的 Note。升级前仍会保留最近一个兼容性快照，便于异常时恢复。
 
 ## 已实现
 
@@ -23,20 +27,20 @@ Note 当前未使用商业代码签名证书，因此 Windows 首次运行时可
 - 富文本支持标题、固定字体/字号、行距、四种段落对齐和正文首行缩进，并提供格式刷与清除格式。对齐使用 Word 式 `Ctrl + L/E/R/J`，字号可用 `Ctrl + [` / `Ctrl + ]` 逐级调整；混合选区使用 Times New Roman 时只改变西文，中文原有字体保持不变。
 - 支持真正可编辑的表格：可用 10×8 网格快速插入，增删当前行列、切换表头、拖动列宽；在末格按 `Tab` 自动续行。粘贴或导入规范 GFM 表格会自动转为表格，旧笔记中的明确表格也会保守迁移；单表最多 200 行 × 30 列，超限时保留原文。
 - 行内与独立公式由本地 KaTeX 渲染；结构化正文同时派生干净 Markdown 和纯文本，不向用户显示 HTML/Markdown 标记。
-- 支持 Markdown 导入、整库导出及内部管理的 PNG/JPEG/WebP 图片；永久删除前不会清除正文或图片。
+- 支持一次导入多个 Markdown 文件、导出当前单篇笔记及导出整库。单篇或整库导出遇到受管图片时，会写入同名 `.assets` 文件夹并使用普通相对路径；永久删除前不会清除正文或图片。
 - `Ctrl + K` 统一搜索全部笔记与历史 Todo；Todo 和笔记可以互相链接，但不会暗改对方状态。
 - 每次变更原子保存到本地 JSON，并拒绝旧 revision 覆盖新状态；升级保留最近一个兼容性快照。
-- 默认作为桌面底层窗口，也可切换普通或置顶模式；支持托盘、全局快捷键、鼠标穿透锁定和故障回退。
-- 无边框窗口最小 420×660，可从四边/四角缩放、标准最大化，并通过右上角关闭按钮安全保存后退出；Notes 根据宽度自动切换单栏和双栏。
+- 默认作为桌面底层窗口，也可切换普通或置顶模式；支持 Windows 托盘或 macOS 菜单栏图标、全局快捷键、鼠标穿透锁定和故障回退。
+- Windows 使用无边框窗口与右上角最大化/关闭按钮；macOS 使用原生红黄绿窗口按钮与系统菜单。窗口最小 420×660，可从四边/四角缩放并最大化；Notes 根据宽度自动切换单栏和双栏。
 - 应用没有账户或同步服务，正式安装包不会包含开发 fixture、开发者状态或任何用户内容。
 
 ## 安装与直接使用
 
-正式交付只生成 NSIS 安装包，不生成需要先自解压的 portable 版本。普通用户直接从 [Releases](https://github.com/Wang335533/Note/releases) 下载 `Note-x.y.z-setup.exe` 安装。
+正式交付生成 Windows NSIS 安装包和一个 macOS 通用 DMG，不生成 portable 版本。普通用户直接从 [Releases](https://github.com/Wang335533/Note/releases) 下载对应系统的文件。
 
 每次安装都是独立的本地应用，不存在共享内容库。A 电脑的 Todo、笔记正文和图片不会写到 B 电脑，也不会进入项目目录或安装包；跨电脑迁移只能由用户主动整库导出、再导入。
 
-系统关闭命令（例如 Alt+F4）会真正保存并退出 Note；托盘菜单中的“隐藏 Note”和显示/隐藏快捷键只负责临时隐藏。
+Windows 的 Alt+F4 或右上角关闭按钮会真正保存并退出 Note。macOS 的红色关闭按钮与 Cmd+W 只隐藏窗口，应用继续留在 Dock/菜单栏；Cmd+Q 会先完成保存再退出。
 
 ## 本地开发
 
@@ -60,6 +64,8 @@ npm test
 npm run build
 npm run smoke:desktop
 npm run package:installer
+# 只能在 macOS 上执行
+npm run package:mac
 ```
 
 ## 发布新版本
@@ -68,7 +74,7 @@ GitHub Actions 会在每次推送或拉取请求时运行测试和生产构建�
 
 1. 更新 `package.json` 与 `package-lock.json` 中的版本号，并完成测试、构建与桌面 smoke。
 2. 提交代码并创建同版本标签，例如 `vX.Y.Z`。
-3. 推送提交和标签；Release 工作流会在 Windows 环境重新安装锁定依赖、运行测试、构建 NSIS 安装包、生成 SHA-256 校验文件并发布正式 GitHub Release。
+3. 推送提交和标签；Release 工作流会先运行门禁，再由 Windows 与 macOS runner 分别构建 NSIS 和通用 DMG。两个产物都成功并通过基础校验后，才生成统一的 SHA-256 文件并发布 Release。
 
 ```powershell
 npm version <next-version> --no-git-tag-version
@@ -89,22 +95,32 @@ git push origin v<next-version>
 正式运行时，数据保存在 Electron 的用户数据目录下：
 
 ```text
+# Windows
 %APPDATA%/desktop-note/note-data/state.json
+
+# macOS
+~/Library/Application Support/desktop-note/note-data/state.json
 ```
 
 旁边的 `state.json.bak` 是上一次成功写入前的备份。可以从托盘菜单或设置页直接打开实际数据文件夹。
 
-受管图片位于同一台电脑、同一 Windows 用户目录下的 `note-data/attachments/`。应用没有远程同步端点，不会把 Todo、Notes 或图片上传到开发者电脑；浏览器参考数据只用于本地开发预览，生产构建会自动检查并拒绝把参考样例或持久化状态打进桌面包。
+受管图片位于同一台电脑、同一系统用户目录下的 `note-data/attachments/`。应用没有远程同步端点，不会把 Todo、Notes 或图片上传到开发者电脑；浏览器参考数据只用于本地开发预览，生产构建会自动检查并拒绝把参考样例或持久化状态打进桌面包。
 
 同一目录中的 `note-error.log` 与可选的 `note-error.log.old` 只用于记录保存、恢复、窗口层级和进程故障等技术信息，不包含任务文字；当前日志超过 512 KB 时只轮换一次。
 
-开发模式使用独立的 `%APPDATA%/desktop-note-dev/`，不会改动正式版清单。启动时会同时检查主文件、临时文件和备份，并选取结构有效且版本最新的一份恢复。
+开发模式使用独立的 `desktop-note-dev` 用户数据目录，不会改动正式版清单。启动时会同时检查主文件、临时文件和备份，并选取结构有效且版本最新的一份恢复。
 
 ## Windows 桌面层说明
 
 Electron 的透明窗口在部分 Windows 显卡合成路径下可能变成黑色，因此 Note 继续使用暖白不透明表面。当前版本延续 Windows 11 系统圆角与 Windows 10 的 10px 小圆角兼容裁切，减少高 DPI 下的边缘台阶。桌面模式不显示任务栏、不开启常驻最前，普通应用会自然盖住 Note；`Ctrl + Alt + Space` 快速记录时临时显示在前台，失去焦点后恢复普通层级。设置中仍可切换为“普通”或“置顶”。若系统拒绝层级切换，Note 会自动改回普通窗口，避免留下黑框或不可交互窗口。
 
 原先的点击闪动来自 `:focus-within`：任意子控件获得焦点都会触发整张 Note 的缩放动画。当前版本只保留很浅的内部暖光反馈，不再改变整张纸张的尺寸或位置。
+
+## macOS 窗口与安装说明
+
+macOS 使用 `hiddenInset` 原生标题栏：红色关闭只隐藏窗口，绿色按钮进入系统全屏，Cmd+Q 才会触发耐久保存与退出。桌面模式在 macOS 上保持普通窗口层级，不尝试接管 Finder 桌面；置顶模式仍可按需使用。
+
+当前 DMG 使用 ad-hoc 临时签名，以兼容 Apple Silicon 的本地运行要求，但它不代表 Apple Developer ID 信任，也不能替代公证。首次运行的系统拦截按上文“隐私与安全性”流程确认即可；后续同一版本通常不再重复询问。
 
 ## 目录
 

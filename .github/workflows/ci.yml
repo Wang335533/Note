@@ -15,8 +15,15 @@ concurrency:
 
 jobs:
   test-and-build:
-    runs-on: windows-latest
+    name: Test and build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
 
     steps:
       - name: Check out source

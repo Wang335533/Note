@@ -18,6 +18,17 @@ test("release configuration avoids the self-extracting portable target", () => {
   assert.match(packageJson.scripts?.["package:installer"] || "", /--publish never/);
 });
 
+test("macOS release is one ad-hoc-signed universal DMG for Intel and Apple Silicon", () => {
+  const target = packageJson.build?.mac?.target?.[0];
+  assert.equal(target?.target, "dmg");
+  assert.deepEqual(target?.arch, ["universal"]);
+  assert.equal(packageJson.build?.mac?.identity, "-");
+  assert.equal(packageJson.build?.mac?.hardenedRuntime, false);
+  assert.equal(packageJson.build?.mac?.notarize, false);
+  assert.equal(packageJson.build?.dmg?.artifactName, "Note-${version}-mac-universal.${ext}");
+  assert.match(packageJson.scripts?.["package:mac"] || "", /--mac dmg --universal --publish never/);
+});
+
 test("release contains only the locales the Chinese interface can use", () => {
   assert.deepEqual(packageJson.build?.electronLanguages, ["zh-CN", "zh-TW", "en-US"]);
 });
@@ -32,8 +43,8 @@ test("browser preview prebundles every shared CommonJS entry", () => {
   }
 });
 
-test("2.6.1 keeps the stable Windows installation identity used by earlier notes", () => {
-  assert.equal(packageJson.version, "2.6.1");
+test("2.7.0 keeps the stable installation identity used by earlier notes", () => {
+  assert.equal(packageJson.version, "2.7.0");
   assert.equal(packageJson.name, "desktop-note");
   assert.equal(packageJson.build?.appId, "local.desktop.note");
   assert.equal(packageJson.build?.productName, "Note");
