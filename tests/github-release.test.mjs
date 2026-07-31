@@ -44,6 +44,9 @@ test("CI uses locked dependencies with read-only repository access", () => {
   assert.match(ci, /npm ci/);
   assert.match(ci, /npm test/);
   assert.match(ci, /npm run build/);
+  assert.match(ci, /^\s{2}test-and-build:\s*$/m);
+  assert.match(ci, /name: test-and-build/);
+  assert.match(ci, /needs: platform-tests/);
 });
 
 test("tagged Windows and macOS releases are version-checked and published together", () => {

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-and-build:
+  platform-tests:
     name: Test and build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -43,3 +43,20 @@ jobs:
 
       - name: Build production renderer
         run: npm run build
+
+  test-and-build:
+    name: test-and-build
+    if: always()
+    needs: platform-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every supported platform to pass
+        env:
+          PLATFORM_RESULT: ${{ needs.platform-tests.result }}
+        run: |
+          if [ "${PLATFORM_RESULT}" != "success" ]; then
+            echo "At least one supported platform failed validation." >&2
+            exit 1
+          fi
