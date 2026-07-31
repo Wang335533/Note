@@ -1,7 +1,7 @@
 {
   "name": "desktop-note",
-  "version": "2.6.1",
-  "description": "A calm, local-first daily note and checklist for the Windows desktop.",
+  "version": "2.7.0",
+  "description": "A calm, local-first daily note and checklist for Windows and macOS.",
   "author": "Wang335533",
   "license": "MIT",
   "homepage": "https://github.com/Wang335533/Note#readme",
@@ -36,6 +36,7 @@
     "desktop": "npm run build && electron .",
     "test": "node --test tests/*.test.cjs tests/*.test.mjs",
     "package:installer": "npm run build && electron-builder --win nsis --publish never",
+    "package:mac": "npm run build && electron-builder --mac dmg --universal --publish never",
     "package:fast": "npm run build && electron-builder --win dir"
   },
   "devDependencies": {
@@ -95,6 +96,26 @@
         "nsis"
       ],
       "icon": "assets/note.png"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "assets/note-mac.png",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "notarize": false
+    },
+    "dmg": {
+      "artifactName": "Note-${version}-mac-universal.${ext}",
+      "backgroundColor": "#f7f3ef",
+      "iconSize": 96
     },
     "nsis": {
       "artifactName": "Note-${version}-setup.${ext}",

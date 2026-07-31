@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("noteDesktop", {
   addNoteImage: (noteId, payload) => ipcRenderer.invoke("note:add-image", noteId, payload),
   getAssetUrl: (id) => (/^[A-Za-z0-9._-]+$/.test(id) ? `note-asset://local/${encodeURIComponent(id)}` : ""),
   exportLibrary: () => ipcRenderer.invoke("note:export-library"),
+  exportNote: (noteId) => ipcRenderer.invoke("note:export-note", noteId),
   importMarkdown: (notebookId, folderId) => ipcRenderer.invoke("note:import-markdown", notebookId, folderId),
   exportMarkdown: () => ipcRenderer.invoke("note:export-markdown"),
   setWindowMode: (mode) => ipcRenderer.invoke("note:set-window-mode", mode),

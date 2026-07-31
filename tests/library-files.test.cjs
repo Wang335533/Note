@@ -3,7 +3,10 @@ const assert = require("node:assert/strict");
 const {
   attachmentIdFromUrl,
   createLibraryExportPlan,
+  createNoteExportPlan,
   deriveImportedTitle,
+  encodeMarkdownPath,
+  localImageUrlsFromMarkdown,
   noteAssetUrl,
   safeFileSegment,
 } = require("../shared/library-files.cjs");
@@ -73,14 +76,47 @@ test("library export preserves notebook structure, unique note names, and relati
     "研究 项目/识别策略--note-two.md",
     "研究 项目/机制 检验/中介路径.md",
   ]);
-  assert.equal(plan.notes[0].content, "![图](识别策略.assets/image-one.png)");
+  assert.equal(decodeURIComponent(plan.notes[0].content), "![图](识别策略.assets/image-one.png)");
   assert.equal(plan.notes[0].assets[0].relativePath, "研究 项目/识别策略.assets/image-one.png");
 });
 
 test("browser and desktop consumers use the same library helpers", async () => {
   const browserHelpers = await import("../shared/library-files.mjs");
   assert.equal(browserHelpers.createLibraryExportPlan, createLibraryExportPlan);
+  assert.equal(browserHelpers.createNoteExportPlan, createNoteExportPlan);
+  assert.equal(browserHelpers.encodeMarkdownPath, encodeMarkdownPath);
+  assert.equal(browserHelpers.localImageUrlsFromMarkdown, localImageUrlsFromMarkdown);
   assert.equal(browserHelpers.safeFileSegment("../研究:设计?. "), safeFileSegment("../研究:设计?. "));
   assert.equal(browserHelpers.deriveImportedTitle("会议纪要.md", "没有一级标题"), deriveImportedTitle("会议纪要.md", "没有一级标题"));
   assert.equal(browserHelpers.noteAssetUrl("asset-1"), noteAssetUrl("asset-1"));
+});
+
+test("a single note export keeps portable Markdown and adjacent managed assets", () => {
+  const note = {
+    id: "note-one",
+    title: "研究：设计",
+    body: "正文\n\n![图](note-asset://local/image-one)",
+    attachments: [{
+      id: "image-one",
+      fileName: "图.png",
+      mimeType: "image/png",
+      relativePath: "attachments/image-one.png",
+    }],
+  };
+  const plan = createNoteExportPlan(note, "自定义 标题.assets");
+  assert.equal(plan.content, `正文\n\n![图](${encodeMarkdownPath("自定义 标题.assets/image-one.png")})`);
+  assert.deepEqual(plan.assets, [{
+    attachmentId: "image-one",
+    sourceRelativePath: "attachments/image-one.png",
+    relativePath: "自定义 标题.assets/image-one.png",
+  }]);
+  const exportedImageUrls = localImageUrlsFromMarkdown(plan.content);
+  assert.deepEqual(exportedImageUrls, [encodeMarkdownPath(plan.assets[0].relativePath)]);
+  assert.equal(decodeURIComponent(exportedImageUrls[0]), plan.assets[0].relativePath);
+
+  const longTitlePlan = createNoteExportPlan(
+    { ...note, title: "一".repeat(100) },
+    `${"一".repeat(100)}.assets`,
+  );
+  assert.match(longTitlePlan.assets[0].relativePath, /^一{80}\.assets\/image-one\.png$/);
 });

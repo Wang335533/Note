@@ -282,6 +282,28 @@ function NoteEditorPane({ note, notebooks, folders, state, mutate, navigate, sho
           <>
             <button
               type="button"
+              className="icon-button"
+              aria-label="导出当前笔记为 Markdown"
+              title="导出 Markdown"
+              onClick={async () => {
+                const saved = await flush();
+                const failedSave = saved.find((item) => !item?.ok);
+                if (failedSave) {
+                  showToast(failedSave.error || "请先完成保存再导出");
+                  return;
+                }
+                const result = await noteApi.exportNote(note.id);
+                if (result.ok) {
+                  showToast(result.assetCount
+                    ? `Markdown 与 ${result.assetCount} 张图片已导出`
+                    : "Markdown 已导出");
+                } else if (!result.canceled) showToast(result.error || "导出没有完成");
+              }}
+            >
+              <DownloadSimple size={17} />
+            </button>
+            <button
+              type="button"
               className={`icon-button ${note.pinnedAt ? "is-accent" : ""}`}
               aria-label={note.pinnedAt ? "取消置顶" : "置顶笔记"}
               onClick={() => mutate({ type: "note:pin", id: note.id, pinned: !note.pinnedAt })}

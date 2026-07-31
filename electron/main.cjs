@@ -44,9 +44,12 @@ const {
 } = require("../shared/store.cjs");
 const {
   createLibraryExportPlan,
+  createNoteExportPlan,
   deriveImportedTitle,
   imageExtension,
+  localImageUrlsFromMarkdown,
   noteAssetUrl,
+  safeFileSegment,
 } = require("../shared/library-files.cjs");
 
 const LEGACY_WINDOW_RADIUS = 10;
@@ -57,6 +60,7 @@ const SHORTCUT_NEW_NOTE = "CommandOrControl+Alt+Shift+N";
 const NOTE_ASSET_SCHEME = "note-asset";
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_IMPORTED_MARKDOWN_BYTES = 5 * 1024 * 1024;
+const IS_MAC = process.platform === "darwin";
 
 protocol.registerSchemesAsPrivileged([{
   scheme: NOTE_ASSET_SCHEME,
@@ -91,6 +95,7 @@ let nativeModeTransition = false;
 let windowModeEpoch = 0;
 let desktopHostError = null;
 let cachedIcon = null;
+let cachedTrayIcon = null;
 let backgroundServicesStarted = false;
 let backgroundServicesTimer = null;
 let pendingUpgrade = null;
@@ -159,6 +164,24 @@ function pickIcon() {
   }
   cachedIcon = nativeImage.createEmpty();
   return cachedIcon;
+}
+
+function pickTrayIcon() {
+  if (cachedTrayIcon) return cachedTrayIcon;
+  const names = IS_MAC
+    ? ["note-trayTemplate.png", "note-tray.png", "note.png"]
+    : ["note-tray.png", "note.png", "note.svg"];
+  for (const name of names) {
+    const candidate = assetPath(name);
+    if (!fsSync.existsSync(candidate)) continue;
+    const image = nativeImage.createFromPath(candidate);
+    if (image.isEmpty()) continue;
+    if (IS_MAC) image.setTemplateImage(true);
+    cachedTrayIcon = image;
+    return cachedTrayIcon;
+  }
+  cachedTrayIcon = nativeImage.createEmpty();
+  return cachedTrayIcon;
 }
 
 async function loadState() {
@@ -427,15 +450,64 @@ async function exportNotesLibrary() {
   }
 }
 
-function markdownLocalImageUrls(markdown) {
-  const urls = new Set();
-  const pattern = /!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)/g;
-  for (const match of String(markdown || "").matchAll(pattern)) {
-    const value = match[1] || match[2];
-    if (!value || /^(?:https?:|data:|note-asset:|file:)/i.test(value)) continue;
-    urls.add(value);
+async function replaceExportFile(temporary, destination) {
+  try {
+    await fs.rename(temporary, destination);
+  } catch (error) {
+    if (!["EEXIST", "EPERM"].includes(error?.code)) throw error;
+    await fs.rm(destination, { force: true });
+    await fs.rename(temporary, destination);
   }
-  return [...urls];
+}
+
+async function exportSingleNote(noteId) {
+  const note = state?.notes?.[noteId];
+  if (!note || note.trashedAt) return { ok: false, error: "未找到可导出的笔记" };
+  const suggestedStem = safeFileSegment(note.title || deriveImportedTitle("", note.body), "无标题");
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "导出 Markdown 笔记",
+    defaultPath: path.join(app.getPath("documents"), `${suggestedStem}.md`),
+    filters: [{ name: "Markdown", extensions: ["md"] }],
+    buttonLabel: "导出",
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+
+  const filePath = /\.md$/i.test(result.filePath) ? result.filePath : `${result.filePath}.md`;
+  const chosenStem = safeFileSegment(path.basename(filePath, path.extname(filePath)), suggestedStem);
+  const plan = createNoteExportPlan(note, `${chosenStem}.assets`);
+  const root = path.dirname(filePath);
+  const temporaryFiles = [];
+  try {
+    const assets = plan.assets.map((asset) => ({
+      source: managedAttachmentPath(asset.sourceRelativePath),
+      target: safeChildPath(root, asset.relativePath),
+    }));
+    await Promise.all(assets.map(async ({ source }) => {
+      const stat = await fs.stat(source);
+      if (!stat.isFile()) throw new Error("笔记中的一张图片文件已丢失");
+    }));
+
+    for (const { source, target } of assets) {
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      const temporary = `${target}.note-export-${randomUUID()}.tmp`;
+      temporaryFiles.push(temporary);
+      await fs.copyFile(source, temporary);
+      await replaceExportFile(temporary, target);
+      temporaryFiles.splice(temporaryFiles.indexOf(temporary), 1);
+    }
+
+    const temporaryMarkdown = `${filePath}.note-export-${randomUUID()}.tmp`;
+    temporaryFiles.push(temporaryMarkdown);
+    await fs.writeFile(temporaryMarkdown, plan.content, { encoding: "utf8", flush: true });
+    await replaceExportFile(temporaryMarkdown, filePath);
+    temporaryFiles.splice(temporaryFiles.indexOf(temporaryMarkdown), 1);
+    return { ok: true, filePath, assetCount: plan.assets.length };
+  } catch (error) {
+    reportError("Unable to export a Markdown note", error);
+    return { ok: false, error: error?.message || "导出 Markdown 失败" };
+  } finally {
+    await Promise.allSettled(temporaryFiles.map((file) => fs.rm(file, { force: true })));
+  }
 }
 
 async function inspectMarkdownImport(filePaths) {
@@ -450,7 +522,7 @@ async function inspectMarkdownImport(filePaths) {
     const body = await fs.readFile(file, "utf8");
     const sourceRoot = path.resolve(path.dirname(file));
     const images = [];
-    for (const rawUrl of markdownLocalImageUrls(body)) {
+    for (const rawUrl of localImageUrlsFromMarkdown(body)) {
       if (imageCount >= 100) break;
       let decoded;
       try {
@@ -589,6 +661,8 @@ function publicState() {
       desktopHostError,
       desktopTemporarilyLifted,
       isMaximized: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isMaximized()),
+      isFullScreen: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()),
+      platform: process.platform,
     },
   };
 }
@@ -599,7 +673,11 @@ function visibleWindow() {
 
 async function showWindow({ focusInput = false, settings = false, temporaryForeground = false } = {}) {
   if (quitPreparationInProgress || quitFlushInProgress) return;
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (!state) return;
+    createWindow();
+    return;
+  }
   if (state.settings.locked) {
     state = applyOperation(state, { type: "settings:set", key: "locked", value: false });
     mainWindow.setIgnoreMouseEvents(false);
@@ -654,32 +732,32 @@ async function applyWindowMode({ temporaryForeground = false, persistFallback = 
   let finalStatus = currentSaveStatus;
   nativeModeTransition = true;
   try {
-    if (mainWindow.isMaximized()) {
+    if (mainWindow.isMaximized() || mainWindow.isFullScreen()) {
       mainWindow.setAlwaysOnTop(false, "normal");
-      mainWindow.setSkipTaskbar(false);
+      if (!IS_MAC) mainWindow.setSkipTaskbar(false);
       desktopTemporarilyLifted = mode === "desktop";
       desktopHostError = null;
     } else if (mode === "desktop" && !temporaryForeground) {
       mainWindow.setAlwaysOnTop(false, "normal");
-      mainWindow.setSkipTaskbar(true);
+      if (!IS_MAC) mainWindow.setSkipTaskbar(true);
       if (epoch !== windowModeEpoch || !mainWindow || mainWindow.isDestroyed()) return;
       desktopTemporarilyLifted = false;
       desktopHostError = null;
     } else {
       if (epoch !== windowModeEpoch || !mainWindow || mainWindow.isDestroyed()) return;
-      mainWindow.setSkipTaskbar(mode === "desktop");
+      if (!IS_MAC) mainWindow.setSkipTaskbar(mode === "desktop");
       const floating = mode === "floating" || (mode === "desktop" && temporaryForeground);
       mainWindow.setAlwaysOnTop(floating, floating ? "floating" : "normal");
       if (mode !== "desktop") desktopTemporarilyLifted = false;
       desktopHostError = null;
     }
   } catch (error) {
-    desktopHostError = error?.message || "无法连接 Windows 桌面层";
+    desktopHostError = error?.message || "无法切换窗口层级";
     reportError("Unable to apply the requested window layer", error);
     if (mainWindow && !mainWindow.isDestroyed()) {
       try {
         mainWindow.setAlwaysOnTop(false, "normal");
-        mainWindow.setSkipTaskbar(false);
+        if (!IS_MAC) mainWindow.setSkipTaskbar(false);
       } catch (fallbackError) {
         reportError("Unable to restore the normal window layer", fallbackError);
       }
@@ -727,9 +805,11 @@ function loginExecutablePath() {
 
 function applyLaunchAtLogin() {
   const enabled = Boolean(state.settings.launchAtLogin);
-  const settings = app.isPackaged
-    ? { openAtLogin: enabled, path: loginExecutablePath() }
-    : { openAtLogin: enabled, path: process.execPath, args: [app.getAppPath()] };
+  const settings = IS_MAC
+    ? { openAtLogin: enabled, openAsHidden: false }
+    : app.isPackaged
+      ? { openAtLogin: enabled, path: loginExecutablePath() }
+      : { openAtLogin: enabled, path: process.execPath, args: [app.getAppPath()] };
   app.setLoginItemSettings(settings);
 }
 
@@ -817,14 +897,16 @@ function createWindow() {
     minWidth: WINDOW_METRICS.minWidth,
     minHeight: WINDOW_METRICS.minHeight,
     show: false,
-    frame: false,
+    frame: IS_MAC,
+    titleBarStyle: IS_MAC ? "hiddenInset" : undefined,
+    trafficLightPosition: IS_MAC ? { x: 18, y: 20 } : undefined,
     roundedCorners: true,
     transparent: false,
     resizable: true,
     movable: true,
     minimizable: true,
     maximizable: true,
-    fullscreenable: false,
+    fullscreenable: IS_MAC,
     skipTaskbar: false,
     hasShadow: true,
     backgroundColor: "#f7f3ef",
@@ -895,7 +977,12 @@ function createWindow() {
   mainWindow.on("close", (event) => {
     if (!isQuitting) {
       event.preventDefault();
-      app.quit();
+      if (IS_MAC) {
+        mainWindow.hide();
+        rebuildTrayMenu();
+      } else {
+        app.quit();
+      }
     }
   });
 
@@ -913,7 +1000,7 @@ function createWindow() {
     clearTimeout(boundsTimer);
     boundsTimer = setTimeout(async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
-      if (mainWindow.isMaximized()) return;
+      if (mainWindow.isMaximized() || mainWindow.isFullScreen()) return;
       const { x, y, width, height } = mainWindow.getNormalBounds();
       const saved = state.settings.windowBounds;
       if (saved?.x === x
@@ -967,9 +1054,18 @@ function createWindow() {
     void syncMaximizedState(false);
     scheduleWindowBoundsSave();
   });
+  mainWindow.on("enter-full-screen", () => {
+    void applyWindowMode();
+    broadcastState(currentSaveStatus);
+  });
+  mainWindow.on("leave-full-screen", () => {
+    void applyWindowMode();
+    broadcastState(currentSaveStatus);
+    scheduleWindowBoundsSave();
+  });
 
   mainWindow.on("blur", () => {
-    if (mainWindow.isMaximized()) return;
+    if (mainWindow.isMaximized() || mainWindow.isFullScreen()) return;
     if (!desktopTemporarilyLifted || state.settings.windowMode !== "desktop") return;
     setTimeout(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -1006,6 +1102,71 @@ async function mutate(operation) {
     sendSaveStatus("error");
     return { ok: false, error: error?.message || "操作失败", state: publicState() };
   }
+}
+
+function configureApplicationMenu() {
+  if (!IS_MAC) {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+  const menu = Menu.buildFromTemplate([
+    {
+      label: app.name,
+      submenu: [
+        { role: "about", label: "关于 Note" },
+        { type: "separator" },
+        {
+          label: "设置…",
+          accelerator: "Command+,",
+          click: () => void showWindow({ settings: true, temporaryForeground: true }),
+        },
+        { type: "separator" },
+        { role: "services", label: "服务" },
+        { type: "separator" },
+        { role: "hide", label: "隐藏 Note" },
+        { role: "hideOthers", label: "隐藏其他" },
+        { role: "unhide", label: "全部显示" },
+        { type: "separator" },
+        { role: "quit", label: "退出 Note" },
+      ],
+    },
+    {
+      label: "文件",
+      submenu: [
+        {
+          label: "新建笔记",
+          accelerator: "Command+N",
+          click: () => void createBlankNoteAndShow(),
+        },
+        { type: "separator" },
+        { role: "close", label: "关闭窗口" },
+      ],
+    },
+    {
+      label: "编辑",
+      submenu: [
+        { role: "undo", label: "撤销" },
+        { role: "redo", label: "重做" },
+        { type: "separator" },
+        { role: "cut", label: "剪切" },
+        { role: "copy", label: "复制" },
+        { role: "paste", label: "粘贴" },
+        { role: "pasteAndMatchStyle", label: "粘贴并匹配样式" },
+        { role: "delete", label: "删除" },
+        { role: "selectAll", label: "全选" },
+      ],
+    },
+    {
+      label: "窗口",
+      submenu: [
+        { role: "minimize", label: "最小化" },
+        { role: "zoom", label: "缩放" },
+        { type: "separator" },
+        { role: "front", label: "前置全部窗口" },
+      ],
+    },
+  ]);
+  Menu.setApplicationMenu(menu);
 }
 
 function rebuildTrayMenu() {
@@ -1080,7 +1241,7 @@ function rebuildTrayMenu() {
 }
 
 function createTray() {
-  const icon = pickIcon();
+  const icon = pickTrayIcon();
   tray = new Tray(icon);
   tray.on("click", () => void showWindow({ temporaryForeground: true }));
 }
@@ -1103,22 +1264,23 @@ function registerShortcuts() {
   globalShortcut.unregisterAll();
   shortcutFailures = [];
   const shortcuts = [
-    { label: "显示/隐藏", accelerator: SHORTCUT_TOGGLE, action: toggleWindow },
-    { label: "快速记录", accelerator: SHORTCUT_CAPTURE, action: () => void showTodoCapture() },
-    { label: "新建笔记", accelerator: SHORTCUT_NEW_NOTE, action: () => void createBlankNoteAndShow() },
+    { label: "显示/隐藏", accelerator: SHORTCUT_TOGGLE, display: IS_MAC ? "Command+Option+N" : "Ctrl+Alt+N", action: toggleWindow },
+    { label: "快速记录", accelerator: SHORTCUT_CAPTURE, display: IS_MAC ? "Command+Option+Space" : "Ctrl+Alt+Space", action: () => void showTodoCapture() },
+    { label: "新建笔记", accelerator: SHORTCUT_NEW_NOTE, display: IS_MAC ? "Command+Option+Shift+N" : "Ctrl+Alt+Shift+N", action: () => void createBlankNoteAndShow() },
     {
       label: "锁定/解锁",
       accelerator: SHORTCUT_LOCK,
+      display: IS_MAC ? "Command+Option+L" : "Ctrl+Alt+L",
       action: () => mutate({ type: "settings:set", key: "locked", value: !state.settings.locked }),
     },
   ];
   for (const shortcut of shortcuts) {
     try {
       if (!globalShortcut.register(shortcut.accelerator, shortcut.action)) {
-        shortcutFailures.push(`${shortcut.label} ${shortcut.accelerator}`);
+        shortcutFailures.push(`${shortcut.label} ${shortcut.display}`);
       }
     } catch {
-      shortcutFailures.push(`${shortcut.label} ${shortcut.accelerator}`);
+      shortcutFailures.push(`${shortcut.label} ${shortcut.display}`);
     }
   }
   rebuildTrayMenu();
@@ -1157,6 +1319,7 @@ function registerIpc() {
   });
   handleTrustedIpc("note:add-image", (noteId, payload) => addNoteImage(noteId, payload));
   handleTrustedIpc("note:export-library", () => exportNotesLibrary());
+  handleTrustedIpc("note:export-note", (noteId) => exportSingleNote(noteId));
   handleTrustedIpc("note:import-markdown", (notebookId, folderId) => importMarkdownFiles(notebookId, folderId));
   handleTrustedIpc("note:export-markdown", async () => {
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -1190,7 +1353,7 @@ function registerIpc() {
       if (state.settings.windowMode === "desktop") {
         desktopTemporarilyLifted = true;
         mainWindow.setAlwaysOnTop(false, "normal");
-        mainWindow.setSkipTaskbar(false);
+        if (!IS_MAC) mainWindow.setSkipTaskbar(false);
       }
       mainWindow.maximize();
     }
@@ -1333,14 +1496,16 @@ app.whenReady().then(async () => {
   }
   await cleanupOrphanedAttachments(state);
   registerAttachmentProtocol();
-  const login = app.getLoginItemSettings(app.isPackaged
-    ? { path: loginExecutablePath() }
-    : { path: process.execPath, args: [app.getAppPath()] });
+  const login = IS_MAC
+    ? app.getLoginItemSettings()
+    : app.getLoginItemSettings(app.isPackaged
+      ? { path: loginExecutablePath() }
+      : { path: process.execPath, args: [app.getAppPath()] });
   const launchAtLogin = Boolean(login.openAtLogin);
   const needsStartupSave = (!startupStateCommitted && (!primaryCanBeBackedUp || needsStateMigration))
     || state.settings.launchAtLogin !== launchAtLogin;
   state.settings.launchAtLogin = launchAtLogin;
-  Menu.setApplicationMenu(null);
+  configureApplicationMenu();
   registerIpc();
   createWindow();
   backgroundServicesTimer = setTimeout(startBackgroundServices, 1500);

@@ -54,6 +54,24 @@ function posixJoin(...segments) {
     .join("/");
 }
 
+function encodeMarkdownPath(value) {
+  return String(value || "")
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+function localImageUrlsFromMarkdown(markdown) {
+  const urls = new Set();
+  const pattern = /!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)/g;
+  for (const match of String(markdown || "").matchAll(pattern)) {
+    const value = match[1] || match[2];
+    if (!value || /^(?:https?:|data:|note-asset:|file:)/i.test(value)) continue;
+    urls.add(value);
+  }
+  return [...urls];
+}
+
 function deriveImportedTitle(fileName, markdown) {
   const heading = String(markdown || "").match(/^\s*#\s+(.+?)\s*#*\s*$/m)?.[1]?.trim();
   if (heading) return heading;
@@ -85,8 +103,34 @@ function rewriteInternalAssetUrls(markdown, note, assetDirectoryName = "assets")
     const attachment = id ? byId.get(id) : null;
     if (!attachment) return match;
     const fileName = `${safeFileSegment(attachment.id, "image")}${imageExtension(attachment.mimeType)}`;
-    return `${assetDirectoryName}/${fileName}`;
+    return encodeMarkdownPath(posixJoin(assetDirectoryName, fileName));
   });
+}
+
+function safeAssetDirectoryName(value, fallbackStem) {
+  const rawStem = String(value || "").replace(/\.assets$/i, "");
+  const stem = safeFileSegment(rawStem, fallbackStem);
+  return `${stem}.assets`;
+}
+
+function createNoteExportPlan(note, assetDirectoryName) {
+  if (!note || typeof note !== "object" || typeof note.id !== "string") {
+    throw new Error("note is required");
+  }
+  const preferred = safeFileSegment(note.title || deriveImportedTitle("", note.body), "无标题");
+  const assetDirectory = safeAssetDirectoryName(assetDirectoryName || preferred, preferred);
+  return {
+    noteId: note.id,
+    content: rewriteInternalAssetUrls(stripOwnFormatMarkers(note.body), note, assetDirectory),
+    assets: (note.attachments || []).map((attachment) => ({
+      attachmentId: attachment.id,
+      sourceRelativePath: attachment.relativePath,
+      relativePath: posixJoin(
+        assetDirectory,
+        `${safeFileSegment(attachment.id, "image")}${imageExtension(attachment.mimeType)}`,
+      ),
+    })),
+  };
 }
 
 function createLibraryExportPlan(state) {
@@ -125,21 +169,15 @@ function createLibraryExportPlan(state) {
     const preferred = safeFileSegment(note.title || deriveImportedTitle("", note.body), "无标题");
     const fileStem = uniqueSegment(preferred, usedNames, note.id.slice(0, 8));
     const assetDirectory = `${fileStem}.assets`;
-    const content = rewriteInternalAssetUrls(stripOwnFormatMarkers(note.body), note, assetDirectory);
-    const assets = (note.attachments || []).map((attachment) => ({
-      attachmentId: attachment.id,
-      sourceRelativePath: attachment.relativePath,
-      relativePath: posixJoin(
-        destinationFolder,
-        assetDirectory,
-        `${safeFileSegment(attachment.id, "image")}${imageExtension(attachment.mimeType)}`,
-      ),
-    }));
+    const notePlan = createNoteExportPlan(note, assetDirectory);
     notes.push({
       noteId: note.id,
       relativePath: posixJoin(destinationFolder, `${fileStem}.md`),
-      content,
-      assets,
+      content: notePlan.content,
+      assets: notePlan.assets.map((asset) => ({
+        ...asset,
+        relativePath: posixJoin(destinationFolder, asset.relativePath),
+      })),
     });
   }
   return { notes };
@@ -149,8 +187,11 @@ module.exports = {
   NOTE_ASSET_URL_PREFIX,
   attachmentIdFromUrl,
   createLibraryExportPlan,
+  createNoteExportPlan,
   deriveImportedTitle,
+  encodeMarkdownPath,
   imageExtension,
+  localImageUrlsFromMarkdown,
   noteAssetUrl,
   rewriteInternalAssetUrls,
   safeFileSegment,

@@ -481,6 +481,9 @@ function SettingsSheet({ state, close, mutate, showToast }) {
   const settings = state.settings;
   const shortcutFailures = state.runtime?.shortcutFailures || [];
   const desktopHostError = state.runtime?.desktopHostError;
+  const isMac = state.runtime?.platform === "darwin";
+  const primaryKey = isMac ? "⌘" : "Ctrl";
+  const optionKey = isMac ? "⌥" : "Alt";
 
   const setWindowMode = async (mode) => {
     const result = await noteApi.setWindowMode(mode);
@@ -530,13 +533,17 @@ function SettingsSheet({ state, close, mutate, showToast }) {
               <AppWindow size={17} /> 普通
             </button>
           </div>
-          <p className="setting-help">桌面模式不占任务栏，其他软件会自然盖住 Note；快捷记录时临时到前台，失去焦点后自动回落。</p>
+          <p className="setting-help">
+            {isMac
+              ? "桌面模式保持在普通窗口下方；快捷记录时临时到前台，失去焦点后自动回落。"
+              : "桌面模式不占任务栏，其他软件会自然盖住 Note；快捷记录时临时到前台，失去焦点后自动回落。"}
+          </p>
         </div>
 
         <div className="setting-row">
           <div>
             <strong>开机自动出现</strong>
-            <span>登录 Windows 后直接回到今天</span>
+            <span>登录系统后直接回到今天</span>
           </div>
           <Toggle checked={settings.launchAtLogin} onChange={setLaunch} label="开机自动出现" />
         </div>
@@ -585,9 +592,9 @@ function SettingsSheet({ state, close, mutate, showToast }) {
           <Keyboard size={20} />
           <div>
             <strong>全局快捷键</strong>
-            <span><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>N</kbd> 显示 / 隐藏</span>
-            <span><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>Space</kbd> 立即记录</span>
-            <span><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>Shift</kbd><b>+</b><kbd>N</kbd> 新建笔记</span>
+            <span><kbd>{primaryKey}</kbd><b>+</b><kbd>{optionKey}</kbd><b>+</b><kbd>N</kbd> 显示 / 隐藏</span>
+            <span><kbd>{primaryKey}</kbd><b>+</b><kbd>{optionKey}</kbd><b>+</b><kbd>Space</kbd> 立即记录</span>
+            <span><kbd>{primaryKey}</kbd><b>+</b><kbd>{optionKey}</kbd><b>+</b><kbd>Shift</kbd><b>+</b><kbd>N</kbd> 新建笔记</span>
           </div>
         </div>
 
@@ -596,7 +603,7 @@ function SettingsSheet({ state, close, mutate, showToast }) {
             <WarningCircle size={20} weight="fill" />
             <div>
               <strong>有快捷键被其他软件占用</strong>
-              <span>{shortcutFailures.join("；")}。你仍可从系统托盘使用全部功能。</span>
+              <span>{shortcutFailures.join("；")}。你仍可从{isMac ? "菜单栏图标" : "系统托盘"}使用全部功能。</span>
             </div>
           </div>
         ) : null}
@@ -615,7 +622,7 @@ function SettingsSheet({ state, close, mutate, showToast }) {
           <FolderOpen size={19} />
           <div>
             <strong>本机独立存储</strong>
-            <span>Todo、笔记和图片只保存在这台电脑的当前 Windows 用户目录；不会与其他安装共享。</span>
+            <span>Todo、笔记和图片只保存在这台电脑的当前系统用户目录；不会与其他安装共享。</span>
           </div>
         </div>
 
@@ -994,10 +1001,12 @@ export function App() {
     onOpenNote: openLinkedNote,
     reducedMotion: state.settings.reducedMotion,
   };
+  const isMac = state.runtime?.platform === "darwin";
+  const isExpandedWindow = state.runtime?.isMaximized || state.runtime?.isFullScreen;
 
   return (
     <main
-      className={`preview-shell ${isDesktop ? "desktop-runtime" : ""} ${state.runtime?.isMaximized ? "is-maximized" : ""} ${state.settings.reducedMotion ? "reduce-motion" : ""}`}
+      className={`preview-shell ${isDesktop ? "desktop-runtime" : ""} ${isExpandedWindow ? "is-maximized" : ""} ${isMac ? "platform-darwin" : "platform-win32"} ${state.settings.reducedMotion ? "reduce-motion" : ""}`}
       onClick={(event) => {
         if (!event.target.closest(".task-actions")) setOpenMenu(null);
         if (activeModule === "todo"
@@ -1066,7 +1075,7 @@ export function App() {
               <div className="window-grip" title="拖动窗口">
                 <DotsSixVertical size={20} weight="bold" aria-hidden="true" />
               </div>
-              {isDesktop ? (
+              {isDesktop && !isMac ? (
                 <>
                   <button
                     type="button"
