@@ -66,6 +66,8 @@ test("tagged Windows and macOS releases are version-checked and published togeth
   assert.match(release, /Note-\$\{version\}-mac-universal\.dmg/);
   assert.match(release, /sha256sum/);
   assert.match(release, /SHA256SUMS\.txt/);
+  assert.match(release, /gh release view .*\/dev\/null 2>&1/);
+  assert.match(release, /gh release view [\s\S]*--json isDraft[\s\S]*--jq '\.isDraft'/);
   assert.match(release, /gh release create[\s\S]*--draft/);
   assert.match(release, /gh release edit .*--draft=false/);
   assert.match(release, /already published; immutable releases are never overwritten/);

@@ -165,13 +165,16 @@ jobs:
         shell: bash
         run: |
           version="${{ needs.validate.outputs.note_version }}"
-          release_api="repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}"
-          existing_draft="$(gh api "${release_api}" --jq '.draft' 2>/dev/null || true)"
-          if [[ "${existing_draft}" == "false" ]]; then
-            echo "Release ${GITHUB_REF_NAME} is already published; immutable releases are never overwritten."
-            exit 0
-          fi
-          if [[ -z "${existing_draft}" ]]; then
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            existing_draft="$(gh release view "${GITHUB_REF_NAME}" \
+              --json isDraft \
+              --jq '.isDraft' \
+              --repo "${GITHUB_REPOSITORY}")"
+            if [[ "${existing_draft}" == "false" ]]; then
+              echo "Release ${GITHUB_REF_NAME} is already published; immutable releases are never overwritten."
+              exit 0
+            fi
+          else
             notes=$'Windows：下载 Note-'"${version}"$'-setup.exe。\n\nmacOS：下载 Note-'"${version}"$'-mac-universal.dmg（Intel 与 Apple Silicon 通用）。当前 macOS 版使用临时签名、未经过 Apple 公证，首次打开时需在“系统设置 → 隐私与安全性”中确认。'
             gh release create "${GITHUB_REF_NAME}" \
               --draft \
