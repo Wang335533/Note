@@ -70,21 +70,27 @@ npm run package:mac
 
 ## 发布新版本
 
-GitHub Actions 会在每次推送或拉取请求时运行测试和生产构建。正式版本采用语义化标签发布：
+GitHub Actions 会在每次推送或拉取请求时运行测试和生产构建。`main` 受仓库 Ruleset 保护，正式版本采用语义化标签发布：
 
-1. 更新 `package.json` 与 `package-lock.json` 中的版本号，并完成测试、构建与桌面 smoke。
-2. 提交代码并创建同版本标签，例如 `vX.Y.Z`。
-3. 推送提交和标签；Release 工作流会先运行门禁，再由 Windows 与 macOS runner 分别构建 NSIS 和通用 DMG。两个产物都成功并通过基础校验后，才生成统一的 SHA-256 文件并发布 Release。
+1. 在版本分支更新 `package.json` 与 `package-lock.json`，并完成测试、构建与桌面 smoke。
+2. 推送分支并创建 PR；必需检查 `test-and-build` 通过后，以 squash 或 rebase 方式合入 `main`。
+3. 同步合并后的 `main`，再创建同版本标签，例如 `vX.Y.Z`。推送标签后，Release 工作流分别在 Windows 与 macOS runner 构建 NSIS 和通用 DMG；两个产物都成功并通过基础校验后，才生成统一的 SHA-256 文件并公开 Release。
 
 ```powershell
+git switch -c release/<next-version>
 npm version <next-version> --no-git-tag-version
 npm test
 npm run build
 npm run smoke:desktop
 git add .
 git commit -m "release: v<next-version>"
-git tag v<next-version>
-git push origin main
+git push -u origin HEAD
+gh pr create --base main
+# CI 通过后
+gh pr merge --squash --delete-branch
+git switch main
+git pull --ff-only
+git tag -a v<next-version> -m "Note <next-version>"
 git push origin v<next-version>
 ```
 

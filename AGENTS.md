@@ -10,6 +10,7 @@ Note 是一个面向 Windows 与 macOS 的本地优先桌面应用：`Todo` 负�
 - 开发桌面版：`npm run desktop:dev`；仅浏览器预览：`npm run dev`。
 - 提交前至少运行：`npm test`、`npm run build`。
 - 涉及 Electron、持久化、升级或富文本时，再运行：`npm run smoke:desktop`。
+- `main` 受仓库 Ruleset 保护：所有改动先走分支与 PR，`test-and-build` 通过后使用 squash 或 rebase 合并；正式版本标签只能在合并后的 `main` 上创建。
 - Windows 安装包：`npm run package:installer`；macOS 通用 DMG：在 macOS 上运行 `npm run package:mac`；正式发布只由 `vX.Y.Z` 标签触发 GitHub Actions。
 
 ## 技术栈与目录
