@@ -58,5 +58,5 @@ Note 是一个面向 Windows 与 macOS 的本地优先桌面应用：`Todo` 负�
 
 - 正式交付只发布 Windows NSIS、macOS Universal DMG 和包含两者的 `SHA256SUMS.txt`，不发布自解压 portable。
 - 打包 smoke 必须使用显式临时 `NOTE_SMOKE_USER_DATA`，不能只改 `APPDATA`。
-- 当前稳定版为 `2.7.1`；本文件不保存单次迭代流水账或已完成 TODO。
+- 当前稳定版为 `2.7.2`；本文件不保存单次迭代流水账或已完成 TODO。
 - `design-qa.md` 与 QA 图片是版本验收证据，不是现役产品规则；当前行为以代码、测试、README 和 `docs/PRODUCT.md` 裁决。
