@@ -153,6 +153,7 @@ function NoteEditorPane({ note, notebooks, folders, state, mutate, navigate, sho
     block: "paragraph",
     canClear: false,
     painterActive: false,
+    painterMode: null,
     inTable: false,
     tableHasHeader: false,
     tableRows: 0,
@@ -181,7 +182,7 @@ function NoteEditorPane({ note, notebooks, folders, state, mutate, navigate, sho
     savedTitleRef.current = note.title;
     savedRichBodyKeyRef.current = JSON.stringify(note.richBody);
     setSelection({ text: "", from: 0, to: 0 });
-    setFormatState((current) => ({ ...current, painterActive: false }));
+    setFormatState((current) => ({ ...current, painterActive: false, painterMode: null }));
   }, [note.id]);
 
   useEffect(() => {

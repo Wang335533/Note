@@ -39,6 +39,7 @@ Note 是一个面向 Windows 与 macOS 的本地优先桌面应用：`Todo` 负�
 - 表格必须保存为可编辑的结构化节点；支持 GFM 表格粘贴、保守迁移和导出，单表上限 200 行 × 30 列，超限时保留原文。
 - 段落对齐是 paragraph/heading 的结构化视觉属性；正文首行缩进固定为 2 字符且只允许出现在文档根级 paragraph，二者都不得污染 Markdown。
 - Times New Roman 只占用西文字体槽；混合选区中的中文区段及其现有东亚字体标记不得被覆盖。
+- 格式刷遵循 Word 的单击一次、双击连续和 `Esc` 退出范式；局部选区只复制文字格式，完整段落或光标源才复制段落格式，且不得删除链接、公式或表格结构。
 - 受管图片仅限 PNG/JPEG/WebP，放在内部 attachments 目录；永久删除前不得删除正文或图片。
 - Todo 与 Notes 的链接不改变双方独立的完成、删除、换日与编辑状态。
 
@@ -57,5 +58,5 @@ Note 是一个面向 Windows 与 macOS 的本地优先桌面应用：`Todo` 负�
 
 - 正式交付只发布 Windows NSIS、macOS Universal DMG 和包含两者的 `SHA256SUMS.txt`，不发布自解压 portable。
 - 打包 smoke 必须使用显式临时 `NOTE_SMOKE_USER_DATA`，不能只改 `APPDATA`。
-- 当前稳定版为 `2.7.0`；本文件不保存单次迭代流水账或已完成 TODO。
+- 当前稳定版为 `2.7.1`；本文件不保存单次迭代流水账或已完成 TODO。
 - `design-qa.md` 与 QA 图片是版本验收证据，不是现役产品规则；当前行为以代码、测试、README 和 `docs/PRODUCT.md` 裁决。

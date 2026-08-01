@@ -43,17 +43,28 @@ const ALIGNMENT_OPTIONS = Object.freeze([
   { value: "justify", label: "两端对齐", shortcut: "Ctrl + J", Icon: TextAlignJustify },
 ]);
 
-function FormatButton({ label, active = false, disabled = false, onClick, children }) {
+function FormatButton({
+  label,
+  active = false,
+  disabled = false,
+  onClick,
+  onDoubleClick,
+  painterMode = null,
+  children,
+}) {
   return (
     <button
       type="button"
       className={`format-tool-button ${active ? "is-active" : ""}`}
       aria-label={label}
       aria-pressed={active || undefined}
+      title={label}
       disabled={disabled}
       data-format-button
+      data-painter-mode={painterMode || undefined}
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
     >
       {children}
     </button>
@@ -138,6 +149,21 @@ export function FormattingToolbar({
   const canIncreaseFont = Boolean(nextFontSizeValue(formatState.size, "increase", formatState.block));
   const ActiveAlignmentIcon = ALIGNMENT_OPTIONS.find(({ value }) => value === formatState.textAlign)?.Icon
     || TextAlignLeft;
+  const painterLabel = formatState.painterMode === "locked"
+    ? "格式刷（连续模式，单击取消）"
+    : formatState.painterActive
+      ? "格式刷（单次模式，单击取消）"
+      : "格式刷（单击一次，双击连续）";
+
+  const handlePainterClick = (event) => {
+    if (event.detail > 1) return;
+    if (formatState.painterActive) editorRef.current?.cancelFormatPainter?.();
+    else editorRef.current?.startFormatPainter?.({ persistent: false });
+  };
+
+  const handlePainterDoubleClick = () => {
+    editorRef.current?.startFormatPainter?.({ persistent: true });
+  };
 
   const submitLink = (event) => {
     event.preventDefault();
@@ -186,6 +212,13 @@ export function FormattingToolbar({
             disabled={!canIncreaseFont}
             onClick={() => editorRef.current?.stepFontSize?.("increase")}
           ><span className="font-step-symbol" aria-hidden="true"><b>A</b><i>↑</i></span></FormatButton>
+          <FormatButton
+            label={painterLabel}
+            active={formatState.painterActive}
+            painterMode={formatState.painterMode}
+            onClick={handlePainterClick}
+            onDoubleClick={handlePainterDoubleClick}
+          ><PaintBrush size={17} weight={formatState.painterMode === "locked" ? "fill" : "regular"} /></FormatButton>
           <FormatButton label="加粗" active={formatState.bold} onClick={() => applyInline("bold")}><TextB size={16} weight="bold" /></FormatButton>
           <FormatButton label="斜体" active={formatState.italic} onClick={() => applyInline("italic")}><TextItalic size={16} /></FormatButton>
           <FormatButton label="下划线" active={formatState.underline} onClick={() => applyInline("underline")}><TextUnderline size={16} /></FormatButton>
@@ -371,13 +404,8 @@ export function FormattingToolbar({
               editorRef.current?.openMathEditor?.();
               setMoreOpen(false);
             }}><span className="formula-tool-symbol" aria-hidden="true">∑</span></FormatButton>
-            <FormatButton label="格式刷（使用一次）" active={formatState.painterActive} onClick={() => {
-              editorRef.current?.startFormatPainter?.();
-              setMoreOpen(false);
-            }}><PaintBrush size={17} /></FormatButton>
             <FormatButton label="清除所选格式" disabled={!hasSelection} onClick={() => editorRef.current?.clearFormatting?.()}><Eraser size={17} /></FormatButton>
           </div>
-          <small>{formatState.painterActive ? "拖选目标文字后应用一次；Esc 取消" : "格式刷只应用一次"}</small>
         </div>
       ) : null}
     </div>

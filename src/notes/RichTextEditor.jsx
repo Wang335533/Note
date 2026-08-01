@@ -7,6 +7,15 @@ import richTextModule from "desktop-note/rich-text";
 import { noteAssetUrl } from "desktop-note/library-files";
 import { noteApi } from "../api.js";
 import {
+  captureFormatPainterSnapshot,
+  createFormatPainterLayoutTransaction,
+  createFormatPainterTextTransaction,
+  formatPainterSelectionHasLink,
+  formatPainterSelectionIsInTable,
+  formatPainterTargetRange,
+  selectFormatPainterTarget,
+} from "./format-painter.js";
+import {
   createEditorExtensions,
   clipboardTextFromSlice,
   containsMathMarkup,
@@ -64,24 +73,6 @@ function selectionPayload(editor) {
     from,
     to,
     text: from === to ? "" : editor.state.doc.textBetween(from, to, " ").trim(),
-  };
-}
-
-function snapshotForPainter(editor) {
-  const textStyle = editor.getAttributes("textStyle");
-  const state = formatStateForEditor(editor);
-  return {
-    bold: state.bold,
-    italic: state.italic,
-    underline: state.underline,
-    strike: state.strike,
-    code: state.code,
-    fontFamily: textStyle.fontFamily || "",
-    fontSize: textStyle.fontSize || "",
-    lineHeight: state.lineHeight || "",
-    textAlign: state.textAlign || "left",
-    firstLineIndent: state.firstLineIndent,
-    block: state.block,
   };
 }
 
@@ -250,7 +241,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
   const editorShellRef = useRef(null);
   const mathPopoverRef = useRef(null);
   const painterSnapshotRef = useRef(null);
-  const painterActiveRef = useRef(false);
+  const painterModeRef = useRef(null);
   const preparedContent = useMemo(() => {
     if (!richBody) {
       return {
@@ -272,6 +263,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
   const pendingMigrationSourceRef = useRef(preparedContent.migrated ? JSON.stringify(richBody) : null);
   const mountedContentEmittedRef = useRef(false);
   const [mathDraft, setMathDraft] = useState(null);
+  const [painterMode, setPainterMode] = useState(null);
 
   callbacksRef.current = { onChange, onBlur, onSelectionChange, onFormatStateChange, onBusyChange, showToast };
 
@@ -279,7 +271,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
 
   const emitSelection = (editor) => {
     callbacksRef.current.onSelectionChange?.(selectionPayload(editor));
-    callbacksRef.current.onFormatStateChange?.(formatStateForEditor(editor, painterActiveRef.current));
+    callbacksRef.current.onFormatStateChange?.(formatStateForEditor(editor, painterModeRef.current));
   };
 
   const emitContent = (editor, options = {}) => {
@@ -293,9 +285,10 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
   };
 
   const cancelPainter = ({ quiet = false } = {}) => {
-    if (!painterActiveRef.current) return false;
-    painterActiveRef.current = false;
+    if (!painterModeRef.current) return false;
+    painterModeRef.current = null;
     painterSnapshotRef.current = null;
+    setPainterMode(null);
     if (editorRef.current) emitSelection(editorRef.current);
     if (!quiet) callbacksRef.current.showToast?.("已取消格式刷");
     return true;
@@ -304,29 +297,45 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
   const applyPainter = () => {
     const editor = editorRef.current;
     const snapshot = painterSnapshotRef.current;
-    if (!editor || !snapshot || editor.state.selection.empty) return false;
-    painterActiveRef.current = false;
-    painterSnapshotRef.current = null;
-    let chain = editor.chain().focus().unsetAllMarks().clearNodes();
-    if (snapshot.bold) chain = chain.setBold();
-    if (snapshot.italic) chain = chain.setItalic();
-    if (snapshot.underline) chain = chain.setUnderline();
-    if (snapshot.strike) chain = chain.setStrike();
-    if (snapshot.code) chain = chain.setCode();
-    if (snapshot.fontFamily) chain = chain.setFontFamily(snapshot.fontFamily);
-    if (snapshot.fontSize) chain = chain.setFontSize(snapshot.fontSize);
-    chain = applyBlockToChain(chain, snapshot.block);
-    chain = snapshot.lineHeight
-      ? chain.setParagraphLineHeight(snapshot.lineHeight)
-      : chain.unsetParagraphLineHeight();
-    chain = snapshot.textAlign && snapshot.textAlign !== "left"
-      ? chain.setTextAlign(snapshot.textAlign)
-      : chain.unsetTextAlign();
-    chain = snapshot.firstLineIndent
-      ? chain.setFirstLineIndent()
-      : chain.unsetFirstLineIndent();
-    const applied = chain.run();
-    callbacksRef.current.showToast?.("格式已应用");
+    const activeMode = painterModeRef.current;
+    if (!editor || !snapshot || !activeMode) return false;
+    const targetRange = formatPainterTargetRange(editor.state, snapshot);
+    if (!targetRange) return false;
+
+    const selectionTransaction = selectFormatPainterTarget(editor.state, targetRange);
+    if (selectionTransaction) editor.view.dispatch(selectionTransaction);
+
+    let applied = false;
+    const textTransaction = createFormatPainterTextTransaction(editor.state, snapshot, targetRange);
+    if (textTransaction) {
+      editor.view.dispatch(textTransaction.scrollIntoView());
+      applied = true;
+    }
+
+    if (snapshot.kind === "paragraph") {
+      const inTable = formatPainterSelectionIsInTable(editor.state);
+      const wouldRemoveLinks = snapshot.paragraph?.block === "code-block"
+        && formatPainterSelectionHasLink(editor.state);
+      if (!inTable && !wouldRemoveLinks) {
+        let chain = editor.chain().focus().clearNodes();
+        chain = applyBlockToChain(chain, snapshot.paragraph?.block || "paragraph");
+        applied = chain.run() || applied;
+      }
+      const layoutTransaction = createFormatPainterLayoutTransaction(editor.state, snapshot);
+      if (layoutTransaction) {
+        editor.view.dispatch(layoutTransaction.scrollIntoView());
+        applied = true;
+      }
+    }
+
+    if (activeMode === "single") {
+      painterModeRef.current = null;
+      painterSnapshotRef.current = null;
+      setPainterMode(null);
+    }
+    callbacksRef.current.showToast?.(
+      activeMode === "locked" ? "格式已应用 · 可继续选择下一处" : "格式已应用",
+    );
     emitSelection(editor);
     return applied;
   };
@@ -514,8 +523,16 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       },
       handleDOMEvents: {
         mouseup() {
-          if (!painterActiveRef.current) return false;
+          if (!painterModeRef.current) return false;
           setTimeout(() => applyPainter(), 0);
+          return false;
+        },
+        keyup(_view, event) {
+          if (!painterModeRef.current) return false;
+          const selectionKey = event.shiftKey
+            && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key);
+          const selectAll = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a";
+          if (selectionKey || selectAll) setTimeout(() => applyPainter(), 0);
           return false;
         },
       },
@@ -685,12 +702,24 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       const tableCommand = chain[command];
       return typeof tableCommand === "function" ? tableCommand.call(chain).run() : false;
     },
-    startFormatPainter() {
+    startFormatPainter({ persistent = false } = {}) {
       if (!editorIsReady(editor) || readOnly) return false;
-      painterSnapshotRef.current = snapshotForPainter(editor);
-      painterActiveRef.current = true;
+      const snapshot = captureFormatPainterSnapshot(editor.state);
+      if (!snapshot) {
+        callbacksRef.current.showToast?.("请先把光标放在示例文字中");
+        return false;
+      }
+      const mode = persistent ? "locked" : "single";
+      painterSnapshotRef.current = snapshot;
+      painterModeRef.current = mode;
+      setPainterMode(mode);
       emitSelection(editor);
-      callbacksRef.current.showToast?.("格式刷已启用：拖选目标文字；Esc 取消");
+      const copied = snapshot.kind === "paragraph" ? "文字与段落格式" : "文字格式";
+      callbacksRef.current.showToast?.(
+        persistent
+          ? `已复制${copied} · 连续格式刷已锁定`
+          : `已复制${copied} · 选择目标后应用一次`,
+      );
       editor.commands.focus();
       return true;
     },
@@ -703,8 +732,18 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
   }), [editor, readOnly]);
 
   return (
-    <div ref={editorShellRef} className="rich-note-editor-shell">
+    <div
+      ref={editorShellRef}
+      className={`rich-note-editor-shell ${painterMode ? "is-format-painting" : ""} ${painterMode === "locked" ? "is-format-painting-locked" : ""}`}
+    >
       <EditorContent editor={editor} className="rich-note-editor-host" />
+      {painterMode ? (
+        <div className="format-painter-status" role="status" aria-live="polite">
+          <span aria-hidden="true" />
+          <strong>{painterMode === "locked" ? "格式刷 · 连续" : "格式刷 · 单次"}</strong>
+          <small>Esc 退出</small>
+        </div>
+      ) : null}
       {mathDraft ? (
         <MathEditorPopover
           draft={mathDraft}

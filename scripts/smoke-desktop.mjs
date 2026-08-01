@@ -752,11 +752,21 @@ try {
     selection.addRange(range);
     editor.focus();
     document.dispatchEvent(new Event('selectionchange'));
-    document.querySelector('button[aria-label="更多格式"]')?.click();
     return true;
   })()`);
-  await waitFor(cdp.send, `Boolean(document.querySelector('.more-format-popover'))`, "format painter source menu");
+  await waitFor(cdp.send, `Boolean(document.querySelector('button[aria-label^="格式刷"]'))`, "visible format painter button");
   await evaluate(cdp.send, `document.querySelector('button[aria-label^="格式刷"]')?.click()`);
+  const painterSingleMode = await waitFor(
+    cdp.send,
+    `(() => {
+      const status = document.querySelector('.format-painter-status');
+      const shell = document.querySelector('.rich-note-editor-shell');
+      return status?.textContent.includes('单次') && shell?.classList.contains('is-format-painting')
+        ? { status: status.textContent, cursor: getComputedStyle(document.querySelector('.rich-note-prosemirror')).cursor }
+        : null;
+    })()`,
+    "single-use format painter feedback",
+  );
   await evaluate(cdp.send, `(() => {
     const editor = document.querySelector('.rich-note-prosemirror');
     const target = [...editor.querySelectorAll(':scope > p')].find((item) => item.textContent.includes('Word layout paragraph'));
@@ -783,6 +793,62 @@ try {
         : null;
     })()`,
     "format painter paragraph layout",
+  );
+  const painterSingleComplete = await waitFor(
+    cdp.send,
+    `!document.querySelector('.format-painter-status') && !document.querySelector('.rich-note-editor-shell')?.classList.contains('is-format-painting')`,
+    "single-use format painter completion",
+  );
+
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const source = editor?.querySelector(':scope > p');
+    const button = document.querySelector('button[aria-label^="格式刷"]');
+    if (!editor || !source || !button) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(source);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    button.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2 }));
+    return true;
+  })()`);
+  const painterContinuousMode = await waitFor(
+    cdp.send,
+    `(() => {
+      const button = document.querySelector('button[data-painter-mode="locked"]');
+      const status = document.querySelector('.format-painter-status');
+      return button && status?.textContent.includes('连续') ? { status: status.textContent } : null;
+    })()`,
+    "continuous format painter lock",
+  );
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    const target = [...editor.querySelectorAll(':scope > p')].find((item) => item.textContent.includes('Word layout paragraph'));
+    if (!target) return false;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    document.dispatchEvent(new Event('selectionchange'));
+    editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    return true;
+  })()`);
+  const painterContinuousPersists = await waitFor(
+    cdp.send,
+    `Boolean(document.querySelector('button[data-painter-mode="locked"]') && document.querySelector('.format-painter-status'))`,
+    "continuous format painter after one target",
+  );
+  await evaluate(cdp.send, `document.querySelector('.rich-note-prosemirror')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }))`);
+  const painterEscapeCancelled = await waitFor(
+    cdp.send,
+    `!document.querySelector('.format-painter-status') && !document.querySelector('[data-painter-mode="locked"]')`,
+    "Escape cancelling the format painter",
   );
 
   await evaluate(cdp.send, `(() => {
@@ -1156,7 +1222,12 @@ try {
     inheritedIndent,
     removedIndentBeforeMerge,
     wordLayoutPaste,
+    painterSingleMode,
     painterLayout,
+    painterSingleComplete,
+    painterContinuousMode,
+    painterContinuousPersists,
+    painterEscapeCancelled,
     clearedLayout,
     paragraphLayoutPersistence,
     formulaEditor,
