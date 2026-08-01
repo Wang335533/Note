@@ -25,7 +25,7 @@ test("macOS release is one ad-hoc-signed universal DMG for Intel and Apple Silic
   assert.equal(packageJson.build?.mac?.identity, "-");
   assert.equal(packageJson.build?.mac?.hardenedRuntime, false);
   assert.equal(packageJson.build?.mac?.notarize, false);
-  assert.equal(packageJson.build?.dmg?.artifactName, "Note-${version}-mac-universal.${ext}");
+  assert.equal(packageJson.build?.dmg?.artifactName, "Note-${version}-mac.${ext}");
   assert.match(packageJson.scripts?.["package:mac"] || "", /--mac dmg --universal --publish never/);
 });
 

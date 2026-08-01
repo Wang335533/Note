@@ -118,7 +118,7 @@ jobs:
       - name: Verify macOS artifact
         shell: bash
         run: |
-          dmg="release/Note-${{ needs.validate.outputs.note_version }}-mac-universal.dmg"
+          dmg="release/Note-${{ needs.validate.outputs.note_version }}-mac.dmg"
           test -f "${dmg}"
           hdiutil verify "${dmg}"
 
@@ -126,7 +126,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: note-macos
-          path: release/Note-${{ needs.validate.outputs.note_version }}-mac-universal.dmg
+          path: release/Note-${{ needs.validate.outputs.note_version }}-mac.dmg
           if-no-files-found: error
           retention-days: 3
 
@@ -153,7 +153,7 @@ jobs:
         run: |
           version="${{ needs.validate.outputs.note_version }}"
           windows="Note-${version}-setup.exe"
-          macos="Note-${version}-mac-universal.dmg"
+          macos="Note-${version}-mac.dmg"
           test -f "release/${windows}"
           test -f "release/${macos}"
           (
@@ -175,7 +175,7 @@ jobs:
               exit 0
             fi
           else
-            notes=$'Windows：下载 Note-'"${version}"$'-setup.exe。\n\nmacOS：下载 Note-'"${version}"$'-mac-universal.dmg（Intel 与 Apple Silicon 通用）。当前 macOS 版使用临时签名、未经过 Apple 公证，首次打开时需在“系统设置 → 隐私与安全性”中确认。'
+            notes=$'Windows：下载 Note-'"${version}"$'-setup.exe。\n\nmacOS：下载 Note-'"${version}"$'-mac.dmg（Intel 与 Apple Silicon 通用）。当前 macOS 版使用临时签名、未经过 Apple 公证，首次打开时需在“系统设置 → 隐私与安全性”中确认。'
             gh release create "${GITHUB_REF_NAME}" \
               --draft \
               --verify-tag \
@@ -186,7 +186,7 @@ jobs:
           fi
           gh release upload "${GITHUB_REF_NAME}" \
             "release/Note-${version}-setup.exe" \
-            "release/Note-${version}-mac-universal.dmg" \
+            "release/Note-${version}-mac.dmg" \
             release/SHA256SUMS.txt \
             --clobber \
             --repo "${GITHUB_REPOSITORY}"

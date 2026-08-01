@@ -113,7 +113,7 @@
       "notarize": false
     },
     "dmg": {
-      "artifactName": "Note-${version}-mac-universal.${ext}",
+      "artifactName": "Note-${version}-mac.${ext}",
       "backgroundColor": "#f7f3ef",
       "iconSize": 96
     },
