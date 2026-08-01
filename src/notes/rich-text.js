@@ -1184,7 +1184,12 @@ function selectedTableHasHeaderRow(editor) {
   return false;
 }
 
-export function formatStateForEditor(editor, painterActive = false) {
+export function formatStateForEditor(editor, painterMode = null) {
+  const normalizedPainterMode = painterMode === "locked"
+    ? "locked"
+    : painterMode
+      ? "single"
+      : null;
   if (!editor) {
     return {
       bold: false,
@@ -1202,7 +1207,8 @@ export function formatStateForEditor(editor, painterActive = false) {
       canFirstLineIndent: false,
       block: "paragraph",
       canClear: false,
-      painterActive,
+      painterActive: Boolean(normalizedPainterMode),
+      painterMode: normalizedPainterMode,
       inTable: false,
       tableHasHeader: false,
       tableRows: 0,
@@ -1250,7 +1256,8 @@ export function formatStateForEditor(editor, painterActive = false) {
     canFirstLineIndent: directParagraphs.length > 0,
     block,
     canClear: !editor.state.selection.empty,
-    painterActive,
+    painterActive: Boolean(normalizedPainterMode),
+    painterMode: normalizedPainterMode,
     inTable: editor.isActive("table"),
     tableHasHeader: selectedTableHasHeaderRow(editor),
     tableRows: tableDimensions.rows,
