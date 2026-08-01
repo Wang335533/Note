@@ -11,7 +11,7 @@
 [下载最新版本](https://github.com/Wang335533/Note/releases/latest)：
 
 - Windows：`Note-x.y.z-setup.exe`
-- macOS（Intel 与 Apple Silicon 通用）：`Note-x.y.z-mac-universal.dmg`
+- macOS（Intel 与 Apple Silicon 通用）：`Note-x.y.z-mac.dmg`
 - `SHA256SUMS.txt`：同时核对两个安装文件是否完整
 
 Note 当前没有商业代码签名证书。Windows 首次运行时可能显示“未知发布者”或 SmartScreen 提示；macOS 版使用临时签名、未经过 Apple 公证，首次打开若被拦截，请进入“系统设置 → 隐私与安全性”，在安全提示处选择“仍要打开”。两个安装包均由本仓库的 GitHub Actions 从同一个版本标签自动构建。

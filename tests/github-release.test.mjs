@@ -63,7 +63,7 @@ test("tagged Windows and macOS releases are version-checked and published togeth
   assert.match(release, /npm run package:mac/);
   assert.match(release, /hdiutil verify/);
   assert.match(release, /Note-\$\{version\}-setup\.exe/);
-  assert.match(release, /Note-\$\{version\}-mac-universal\.dmg/);
+  assert.match(release, /Note-\$\{version\}-mac\.dmg/);
   assert.match(release, /sha256sum/);
   assert.match(release, /SHA256SUMS\.txt/);
   assert.match(release, /gh release view .*\/dev\/null 2>&1/);
