@@ -54,10 +54,11 @@ Note 是一个面向 Windows 与 macOS 的本地优先桌面应用：`Todo` 负�
 - Windows 层级切换失败时回退普通窗口并给出非阻断提示，不能留下黑框或不可交互窗口。
 - 系统文件选择器必须由主进程统一协调：桌面模式下打开前临时前置、对话框期间禁止失焦回落，结束后精确恢复原窗口层级；单篇 Markdown 用系统“另存为”，整库用系统目录选择器。
 - 富文本命令必须作用于真实 marks/nodes，不能把 `<font>`、`<span>` 或 LaTeX 定界符作为可见正文保存。
+- 需要先保存再继续的 UI 操作必须返回并检查结构化保存结果；异步按钮事件不得让 rejected promise 静默中断。单篇 Markdown 导出必须由真实 Electron smoke 点击工具栏按钮并验证文件落盘。
 - 任何富文本命令都必须先排除已销毁的 Tiptap 实例。
 
 ## 发布与当前状态
 
 - 正式交付只发布 Windows NSIS、macOS Universal DMG 和包含两者的 `SHA256SUMS.txt`，不发布自解压 portable。
 - 打包 smoke 必须使用显式临时 `NOTE_SMOKE_USER_DATA`，不能只改 `APPDATA`。
-- 当前稳定版为 `2.7.3`；本文件不保存单次迭代流水账或已完成 TODO。
+- 当前稳定版为 `2.7.4`；本文件不保存单次迭代流水账或已完成 TODO。

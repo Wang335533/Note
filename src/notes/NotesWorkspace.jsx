@@ -21,6 +21,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { noteApi } from "../api.js";
 import { FormattingToolbar } from "./FormattingToolbar.jsx";
+import { exportNoteAfterFlush, flushNoteDrafts } from "./note-export.js";
 import { RichTextEditor } from "./RichTextEditor.jsx";
 
 const SYSTEM_VIEWS = {
@@ -219,7 +220,7 @@ function NoteEditorPane({ note, notebooks, folders, state, mutate, navigate, sho
   }, [mutate, note.id]);
 
   const flush = useCallback(async () => {
-    await Promise.all([saveTitle(), saveBody()]);
+    return flushNoteDrafts(saveTitle, saveBody);
   }, [saveBody, saveTitle]);
 
   const suggestedTitle = !title.trim() ? titleSuggestion(body) : "";
@@ -287,13 +288,11 @@ function NoteEditorPane({ note, notebooks, folders, state, mutate, navigate, sho
               aria-label="导出当前笔记为 Markdown"
               title="导出 Markdown"
               onClick={async () => {
-                const saved = await flush();
-                const failedSave = saved.find((item) => !item?.ok);
-                if (failedSave) {
-                  showToast(failedSave.error || "请先完成保存再导出");
-                  return;
-                }
-                const result = await noteApi.exportNote(note.id);
+                const result = await exportNoteAfterFlush({
+                  flush,
+                  exportNote: noteApi.exportNote,
+                  noteId: note.id,
+                });
                 if (result.ok) {
                   showToast(result.assetCount
                     ? `Markdown 与 ${result.assetCount} 张图片已导出`
