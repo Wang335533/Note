@@ -330,7 +330,7 @@ try {
     throw new Error(`Unexpected raw table migration: ${JSON.stringify({ rawTableMigration, rawTableMigrationPersistence })}`);
   }
 
-  await evaluate(cdp.send, `document.querySelector('button[aria-label="新建笔记"]')?.click()`);
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="在当前位置新建笔记"]')?.click()`);
   await waitFor(
     cdp.send,
     `Boolean(document.querySelector('.rich-note-prosemirror[contenteditable="true"]'))`,
@@ -368,6 +368,36 @@ try {
   const basePlatformFonts = await platformFontsForSelector(cdp.send, ".rich-note-prosemirror p");
   await evaluate(cdp.send, `(() => {
     const editor = document.querySelector('.rich-note-prosemirror');
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    let text = walker.nextNode();
+    while (text && !text.nodeValue.includes('Packaged')) text = walker.nextNode();
+    if (!text) return false;
+    const start = text.nodeValue.indexOf('Packaged');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(text, start);
+    range.setEnd(text, start + 'Packaged'.length);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    editor.focus();
+    if (!document.querySelector('.more-format-popover')) {
+      document.querySelector('button[aria-label="更多格式"]')?.click();
+    }
+    return true;
+  })()`);
+  await waitFor(cdp.send, `Boolean(document.querySelector('.more-format-popover select'))`, "the mixed-font setup menu");
+  await evaluate(cdp.send, `(() => {
+    const font = document.querySelector('.more-format-popover select');
+    font.value = 'simhei';
+    font.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await waitFor(
+    cdp.send,
+    `document.querySelector('.rich-note-prosemirror [style*="SimHei"]')?.textContent === 'Packaged'`,
+    "one differently formatted western run",
+  );
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
     editor.focus();
     document.execCommand('selectAll');
     if (!document.querySelector('.more-format-popover')) {
@@ -375,6 +405,14 @@ try {
     }
   })()`);
   await waitFor(cdp.send, `Boolean(document.querySelector('.more-format-popover select'))`, "the rich formatting menu");
+  const mixedFontSelection = await waitFor(
+    cdp.send,
+    `(() => {
+      const font = document.querySelector('.more-format-popover select');
+      return font?.value === '__mixed-font__' ? { value: font.value, label: font.selectedOptions[0]?.textContent } : null;
+    })()`,
+    "the explicit mixed-font selection state",
+  );
   await evaluate(cdp.send, `(() => {
     const font = document.querySelector('.more-format-popover select');
     font.value = 'times-new-roman';
@@ -407,6 +445,40 @@ try {
   ) {
     throw new Error(`Unexpected rich editor state: ${JSON.stringify(richEditor)}`);
   }
+  await evaluate(cdp.send, `(() => {
+    const editor = document.querySelector('.rich-note-prosemirror');
+    editor.focus();
+    document.execCommand('insertText', false, '替换内容 Alpha 456');
+    document.execCommand('insertText', false, '续写 Beta789');
+  })()`);
+  const inheritedFontEditor = await waitFor(
+    cdp.send,
+    `(() => {
+      const editor = document.querySelector('.rich-note-prosemirror');
+      if (editor?.textContent !== '替换内容 Alpha 456续写 Beta789') return null;
+      const western = [...editor.querySelectorAll('[style*="Times New Roman"]')];
+      const eastAsian = [...editor.querySelectorAll('[style*="KaiTi"]')];
+      const westernText = western.map((node) => node.textContent).join('');
+      const eastAsianText = eastAsian.map((node) => node.textContent).join('');
+      if (!westernText.includes('Alpha 456') || !westernText.includes('Beta789')) return null;
+      if (!eastAsianText.includes('替换内容') || !eastAsianText.includes('续写')) return null;
+      return {
+        text: editor.textContent,
+        westernText,
+        eastAsianText,
+        westernFonts: western.map((node) => getComputedStyle(node).fontFamily),
+        eastAsianFonts: eastAsian.map((node) => getComputedStyle(node).fontFamily),
+      };
+    })()`,
+    "Times New Roman replacement and continued input inheritance",
+  );
+  if (
+    /\p{Script=Han}/u.test(inheritedFontEditor.westernText)
+    || inheritedFontEditor.westernFonts.some((font) => !font.includes("Times New Roman"))
+    || inheritedFontEditor.eastAsianFonts.some((font) => !font.includes("KaiTi"))
+  ) {
+    throw new Error(`Unexpected inherited font slots: ${JSON.stringify(inheritedFontEditor)}`);
+  }
   const platformFonts = await platformFontsForSelector(
     cdp.send,
     ".rich-note-prosemirror p",
@@ -420,14 +492,17 @@ try {
 
   await evaluate(cdp.send, `(() => {
     const editor = document.querySelector('.rich-note-prosemirror');
-    const selection = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(editor);
-    selection.removeAllRanges();
-    selection.addRange(range);
     editor.focus();
-    document.querySelector('button[aria-label^="放大一号字体"]')?.click();
+    document.execCommand('selectAll');
+    document.dispatchEvent(new Event('selectionchange'));
+    return window.getSelection()?.toString();
   })()`);
+  await waitFor(
+    cdp.send,
+    `document.querySelector('button[aria-label^="放大一号字体"]')?.disabled === false`,
+    "the synchronized full selection before changing font size",
+  );
+  await evaluate(cdp.send, `document.querySelector('button[aria-label^="放大一号字体"]')?.click()`);
   const increasedFontSize = await waitFor(
     cdp.send,
     `(() => {
@@ -1109,7 +1184,7 @@ try {
     "the pasted table and paragraph layout after a renderer reload",
   );
 
-  await evaluate(cdp.send, `document.querySelector('button[aria-label="新建笔记"]')?.click()`);
+  await evaluate(cdp.send, `document.querySelector('button[aria-label="在当前位置新建笔记"]')?.click()`);
   await waitFor(
     cdp.send,
     `Boolean(document.querySelector('.rich-note-prosemirror[contenteditable="true"]')) && !document.querySelector('.rich-note-prosemirror table')`,
@@ -1210,6 +1285,8 @@ try {
     rawTableMigration,
     rawTableMigrationPersistence,
     richEditor,
+    mixedFontSelection,
+    inheritedFontEditor,
     basePlatformFonts,
     platformFonts,
     increasedFontSize,

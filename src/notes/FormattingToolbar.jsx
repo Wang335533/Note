@@ -370,13 +370,21 @@ export function FormattingToolbar({
         <div className="format-popover more-format-popover" aria-label="更多格式">
           <label className="more-format-field">
             <span>字体</span>
-            <select value={formatState.font || ""} onChange={(event) => applyInline("font", event.target.value)}>
+            <select
+              value={formatState.fontMixed ? "__mixed-font__" : formatState.font || ""}
+              onChange={(event) => applyInline("font", event.target.value)}
+            >
+              {formatState.fontMixed ? <option value="__mixed-font__" disabled>多种字体</option> : null}
               {FONT_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <label className="more-format-field">
             <span>字号</span>
-            <select value={formatState.size || ""} onChange={(event) => applyInline("size", event.target.value)}>
+            <select
+              value={formatState.sizeMixed ? "__mixed-size__" : formatState.size || ""}
+              onChange={(event) => applyInline("size", event.target.value)}
+            >
+              {formatState.sizeMixed ? <option value="__mixed-size__" disabled>多种字号</option> : null}
               {SIZE_OPTIONS.map((option) => <option key={option.value || "default"} value={option.value}>{option.label}</option>)}
             </select>
           </label>

@@ -15,6 +15,7 @@ import {
   formatPainterTargetRange,
   selectFormatPainterTarget,
 } from "./format-painter.js";
+import { clearFontIntentForEditor } from "./font-formatting.js";
 import {
   createEditorExtensions,
   clipboardTextFromSlice,
@@ -611,8 +612,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
       else if (kind === "strike") chain = chain.toggleStrike();
       else if (kind === "code") chain = chain.toggleCode();
       else if (kind === "font") {
-        if (value) return setFontFamilyForEditor(editor, fontFamilyFor(value));
-        chain = chain.unsetFontFamily().removeEmptyTextStyle();
+        return setFontFamilyForEditor(editor, fontFamilyFor(value));
       }
       else if (kind === "size") chain = value ? chain.setFontSize(fontSizeFor(value)) : chain.unsetFontSize().removeEmptyTextStyle();
       else return false;
@@ -651,7 +651,7 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
     },
     clearFormatting() {
       if (!editorIsReady(editor) || readOnly || editor.state.selection.empty) return false;
-      return editor.chain()
+      const applied = editor.chain()
         .focus()
         .unsetAllMarks()
         .removeEmptyTextStyle()
@@ -659,6 +659,8 @@ export const RichTextEditor = forwardRef(function RichTextEditor({
         .unsetTextAlign()
         .unsetFirstLineIndent()
         .run();
+      clearFontIntentForEditor(editor);
+      return applied;
     },
     insertLink(url, label = "") {
       if (!editorIsReady(editor) || readOnly) return false;
