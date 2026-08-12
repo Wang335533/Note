@@ -136,10 +136,13 @@ const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "note-desktop-smok
 const appData = path.join(temporaryRoot, "Roaming");
 const localAppData = path.join(temporaryRoot, "Local");
 const isolatedUserData = path.join(temporaryRoot, "userData");
+const smokeExportDirectory = path.join(temporaryRoot, "exports");
+const smokeExportPath = path.join(smokeExportDirectory, "exported-note.md");
 await Promise.all([
   fs.mkdir(appData, { recursive: true }),
   fs.mkdir(localAppData, { recursive: true }),
   fs.mkdir(isolatedUserData, { recursive: true }),
+  fs.mkdir(smokeExportDirectory, { recursive: true }),
 ]);
 
 const legacyNoteId = "legacy-smoke-note";
@@ -168,6 +171,7 @@ const child = spawn(executable, [...args, `--remote-debugging-port=${port}`], {
     APPDATA: appData,
     LOCALAPPDATA: localAppData,
     NOTE_SMOKE_USER_DATA: isolatedUserData,
+    NOTE_SMOKE_EXPORT_PATH: smokeExportPath,
   },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
@@ -282,6 +286,28 @@ try {
   if (legacyMigration.rawMarkerVisible || !legacyMigration.font.includes("Times New Roman")) {
     throw new Error(`Unexpected legacy migration state: ${JSON.stringify(legacyMigration)}`);
   }
+
+  const exportButtonClicked = await evaluate(
+    cdp.send,
+    `(() => {
+      const button = document.querySelector('button[aria-label="导出当前笔记为 Markdown"]');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`,
+  );
+  if (!exportButtonClicked) throw new Error("Could not click the current-note Markdown export button");
+  const exportedMarkdown = await waitForValue(async () => {
+    try {
+      const content = await fs.readFile(smokeExportPath, "utf8");
+      return content.includes("Legacy migration text")
+        ? { fileName: path.basename(smokeExportPath), content }
+        : null;
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    }
+  }, "the toolbar Markdown export to reach disk");
 
   const rawTableCreated = await evaluate(cdp.send, `(async () => {
     const result = await window.noteDesktop.mutate({
@@ -1282,6 +1308,7 @@ try {
     restoreResult,
     legacyMigration,
     legacyPersistence,
+    exportedMarkdown,
     rawTableMigration,
     rawTableMigrationPersistence,
     richEditor,

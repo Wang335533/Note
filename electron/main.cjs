@@ -485,21 +485,32 @@ async function replaceExportFile(temporary, destination) {
   }
 }
 
+function requestedSmokeExportPath() {
+  const candidate = process.env.NOTE_SMOKE_EXPORT_PATH;
+  if (!process.env.NOTE_SMOKE_USER_DATA || !candidate || !path.isAbsolute(candidate)) return null;
+  return path.resolve(candidate);
+}
+
 async function exportSingleNote(noteId) {
   const note = state?.notes?.[noteId];
   if (!note || note.trashedAt) return { ok: false, error: "未找到可导出的笔记" };
   const suggestedStem = safeFileSegment(note.title || deriveImportedTitle("", note.body), "无标题");
   let result;
-  try {
-    result = await nativeDialogs.showSaveDialog({
-      title: "导出 Markdown 笔记",
-      defaultPath: path.join(app.getPath("documents"), `${suggestedStem}.md`),
-      filters: [{ name: "Markdown", extensions: ["md"] }],
-      buttonLabel: "导出",
-    });
-  } catch (error) {
-    reportError("Unable to open the Markdown export dialog", error);
-    return { ok: false, error: "无法打开 Markdown 另存为窗口" };
+  const smokeExportPath = requestedSmokeExportPath();
+  if (smokeExportPath) {
+    result = { canceled: false, filePath: smokeExportPath };
+  } else {
+    try {
+      result = await nativeDialogs.showSaveDialog({
+        title: "导出 Markdown 笔记",
+        defaultPath: path.join(app.getPath("documents"), `${suggestedStem}.md`),
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+        buttonLabel: "导出",
+      });
+    } catch (error) {
+      reportError("Unable to open the Markdown export dialog", error);
+      return { ok: false, error: "无法打开 Markdown 另存为窗口" };
+    }
   }
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
 
