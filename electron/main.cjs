@@ -20,6 +20,7 @@ const { randomUUID } = require("node:crypto");
 const { pathToFileURL } = require("node:url");
 const { createBoundedFileLogger } = require("./file-logger.cjs");
 const { isSameDocumentUrl, isTrustedRendererEvent } = require("./ipc-security.cjs");
+const { createNativeDialogCoordinator } = require("./native-dialog.cjs");
 const { createSerializedWriter, selectLatestValidCandidate } = require("./persistence.cjs");
 const {
   BACKUP_DIRECTORY_NAME,
@@ -123,6 +124,24 @@ function reportWarning(context, detail) {
   console.warn(context, detail);
   void diagnosticLogger.warn(context, detail);
 }
+
+const nativeDialogs = createNativeDialogCoordinator({
+  dialog,
+  getWindow: () => mainWindow,
+  beforeOpen: async (window) => {
+    if (!window || window.isDestroyed()) return;
+    if (state?.settings?.windowMode === "desktop") {
+      desktopTemporarilyLifted = true;
+      await applyWindowMode({ temporaryForeground: true });
+    }
+    if (!window.isVisible()) window.show();
+    window.focus();
+  },
+  afterClose: async (window) => {
+    if (!window || window.isDestroyed() || window !== mainWindow) return;
+    if (state?.settings?.windowMode === "desktop") await applyWindowMode();
+  },
+});
 
 const stateWriter = createSerializedWriter(async ({ payload, shouldBackup, durable }) => {
   await fs.mkdir(dataDirectory, { recursive: true });
@@ -422,16 +441,22 @@ async function uniqueExportDirectory(parent) {
 }
 
 async function exportNotesLibrary() {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: "选择笔记库导出位置",
-    defaultPath: app.getPath("documents"),
-    properties: ["openDirectory", "createDirectory"],
-    buttonLabel: "导出到这里",
-  });
-  if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
-  const root = await uniqueExportDirectory(result.filePaths[0]);
-  const plan = createLibraryExportPlan(state);
+  let result;
   try {
+    result = await nativeDialogs.showOpenDialog({
+      title: "选择笔记库导出位置",
+      defaultPath: app.getPath("documents"),
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "导出到这里",
+    });
+  } catch (error) {
+    reportError("Unable to open the notes library export dialog", error);
+    return { ok: false, error: "无法打开导出位置选择窗口" };
+  }
+  if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true };
+  try {
+    const root = await uniqueExportDirectory(result.filePaths[0]);
+    const plan = createLibraryExportPlan(state);
     for (const note of plan.notes) {
       const destination = safeChildPath(root, note.relativePath);
       await fs.mkdir(path.dirname(destination), { recursive: true });
@@ -464,12 +489,18 @@ async function exportSingleNote(noteId) {
   const note = state?.notes?.[noteId];
   if (!note || note.trashedAt) return { ok: false, error: "未找到可导出的笔记" };
   const suggestedStem = safeFileSegment(note.title || deriveImportedTitle("", note.body), "无标题");
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: "导出 Markdown 笔记",
-    defaultPath: path.join(app.getPath("documents"), `${suggestedStem}.md`),
-    filters: [{ name: "Markdown", extensions: ["md"] }],
-    buttonLabel: "导出",
-  });
+  let result;
+  try {
+    result = await nativeDialogs.showSaveDialog({
+      title: "导出 Markdown 笔记",
+      defaultPath: path.join(app.getPath("documents"), `${suggestedStem}.md`),
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+      buttonLabel: "导出",
+    });
+  } catch (error) {
+    reportError("Unable to open the Markdown export dialog", error);
+    return { ok: false, error: "无法打开 Markdown 另存为窗口" };
+  }
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
 
   const filePath = /\.md$/i.test(result.filePath) ? result.filePath : `${result.filePath}.md`;
@@ -553,13 +584,19 @@ async function inspectMarkdownImport(filePaths) {
 }
 
 async function importMarkdownFiles(destinationNotebookId = null, destinationFolderId = null) {
-  const selection = await dialog.showOpenDialog(mainWindow, {
-    title: "导入 Markdown 笔记",
-    defaultPath: app.getPath("documents"),
-    filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
-    properties: ["openFile", "multiSelections"],
-    buttonLabel: "选择笔记",
-  });
+  let selection;
+  try {
+    selection = await nativeDialogs.showOpenDialog({
+      title: "导入 Markdown 笔记",
+      defaultPath: app.getPath("documents"),
+      filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+      properties: ["openFile", "multiSelections"],
+      buttonLabel: "选择笔记",
+    });
+  } catch (error) {
+    reportError("Unable to open the Markdown import dialog", error);
+    return { ok: false, error: "无法打开 Markdown 文件选择窗口", state: publicState() };
+  }
   if (selection.canceled || !selection.filePaths?.length) return { ok: false, canceled: true };
 
   let inspected;
@@ -571,16 +608,22 @@ async function importMarkdownFiles(destinationNotebookId = null, destinationFold
 
   let copyImages = false;
   if (inspected.imageCount) {
-    const confirmation = await dialog.showMessageBox(mainWindow, {
-      type: "question",
-      title: "同时导入本地图片？",
-      message: `发现 ${inspected.imageCount} 张可复制的本地图片。`,
-      detail: "复制后图片由 Note 管理，并会随整库导出。选择“只导入文字”会保留原 Markdown 路径。",
-      buttons: ["导入并复制图片", "只导入文字", "取消"],
-      defaultId: 0,
-      cancelId: 2,
-      noLink: true,
-    });
+    let confirmation;
+    try {
+      confirmation = await nativeDialogs.showMessageBox({
+        type: "question",
+        title: "同时导入本地图片？",
+        message: `发现 ${inspected.imageCount} 张可复制的本地图片。`,
+        detail: "复制后图片由 Note 管理，并会随整库导出。选择“只导入文字”会保留原 Markdown 路径。",
+        buttons: ["导入并复制图片", "只导入文字", "取消"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+    } catch (error) {
+      reportError("Unable to open the Markdown image import confirmation", error);
+      return { ok: false, error: "无法打开图片导入确认窗口", state: publicState() };
+    }
     if (confirmation.response === 2) return { ok: false, canceled: true };
     copyImages = confirmation.response === 0;
   }
@@ -1065,10 +1108,12 @@ function createWindow() {
   });
 
   mainWindow.on("blur", () => {
+    if (nativeDialogs.isActive()) return;
     if (mainWindow.isMaximized() || mainWindow.isFullScreen()) return;
     if (!desktopTemporarilyLifted || state.settings.windowMode !== "desktop") return;
     setTimeout(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (nativeDialogs.isActive()) return;
       if (!desktopTemporarilyLifted || state.settings.windowMode !== "desktop") return;
       void applyWindowMode();
     }, 180);
@@ -1322,14 +1367,21 @@ function registerIpc() {
   handleTrustedIpc("note:export-note", (noteId) => exportSingleNote(noteId));
   handleTrustedIpc("note:import-markdown", (notebookId, folderId) => importMarkdownFiles(notebookId, folderId));
   handleTrustedIpc("note:export-markdown", async () => {
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: "导出 Note",
-      defaultPath: path.join(app.getPath("documents"), `Note-${state.activeDay}.md`),
-      filters: [{ name: "Markdown", extensions: ["md"] }],
-    });
-    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
-    await fs.writeFile(result.filePath, markdownForState(state), "utf8");
-    return { ok: true, filePath: result.filePath };
+    try {
+      const result = await nativeDialogs.showSaveDialog({
+        title: "导出 Note",
+        defaultPath: path.join(app.getPath("documents"), `Note-${state.activeDay}.md`),
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+        buttonLabel: "导出",
+      });
+      if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+      const filePath = /\.md$/i.test(result.filePath) ? result.filePath : `${result.filePath}.md`;
+      await fs.writeFile(filePath, markdownForState(state), { encoding: "utf8", flush: true });
+      return { ok: true, filePath };
+    } catch (error) {
+      reportError("Unable to export the daily Markdown", error);
+      return { ok: false, error: "无法导出 Markdown" };
+    }
   });
   handleTrustedIpc("note:set-window-mode", (mode) => mutate({
     type: "settings:set",

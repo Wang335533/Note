@@ -15,10 +15,17 @@ import { marked } from "marked";
 import "katex/dist/katex.min.css";
 import richTextModule from "desktop-note/rich-text";
 import { attachmentIdFromUrl } from "desktop-note/library-files";
+import {
+  fontIntentForEditor,
+  NoteFontIntent,
+  selectedTextStyleState,
+  setFontFamilyForEditor,
+} from "./font-formatting.js";
+
+export { setFontFamilyForEditor };
 
 const {
   emptyRichBody,
-  isWesternFontCharacter,
   MAX_TABLE_COLUMNS,
   MAX_TABLE_ROWS,
   migrateMathInRichBody,
@@ -401,78 +408,6 @@ const NoteTable = Table.extend({
   },
 });
 
-function replaceTextStyleFont(transaction, markType, from, to, currentAttributes, fontFamily) {
-  const currentFont = currentAttributes.fontFamily || null;
-  const nextFont = fontFamily || null;
-  if (currentFont === nextFont) return false;
-  const nextAttributes = { ...currentAttributes, fontFamily: nextFont };
-  transaction.removeMark(from, to, markType);
-  if (Object.values(nextAttributes).some((value) => value !== null && value !== undefined && value !== "")) {
-    transaction.addMark(from, to, markType.create(nextAttributes));
-  }
-  return true;
-}
-
-export function setFontFamilyForEditor(editor, fontFamily) {
-  if (!editor || editor.isDestroyed || !fontFamily) return false;
-  editor.commands.focus();
-  const { state } = editor;
-  const { from, to, empty } = state.selection;
-  if (empty || fontFamily !== "Times New Roman") {
-    return editor.chain().setFontFamily(fontFamily).run();
-  }
-
-  const markType = state.schema.marks.textStyle;
-  if (!markType) return false;
-  const transaction = state.tr;
-  let changed = false;
-  state.doc.nodesBetween(from, to, (node, position) => {
-    if (!node.isText || !node.text) return;
-    const selectedFrom = Math.max(from, position);
-    const selectedTo = Math.min(to, position + node.nodeSize);
-    if (selectedFrom >= selectedTo) return;
-    const selectedText = node.text.slice(selectedFrom - position, selectedTo - position);
-    const textStyleMark = node.marks.find((mark) => mark.type === markType);
-    const currentAttributes = textStyleMark?.attrs || {};
-    let offset = 0;
-    while (offset < selectedText.length) {
-      const character = String.fromCodePoint(selectedText.codePointAt(offset));
-      const western = isWesternFontCharacter(character);
-      let runEnd = offset + character.length;
-      while (runEnd < selectedText.length) {
-        const nextCharacter = String.fromCodePoint(selectedText.codePointAt(runEnd));
-        if (isWesternFontCharacter(nextCharacter) !== western) break;
-        runEnd += nextCharacter.length;
-      }
-      const runFrom = selectedFrom + offset;
-      const runTo = selectedFrom + runEnd;
-      if (western) {
-        changed = replaceTextStyleFont(
-          transaction,
-          markType,
-          runFrom,
-          runTo,
-          currentAttributes,
-          fontFamily,
-        ) || changed;
-      } else if (currentAttributes.fontFamily === "Times New Roman") {
-        changed = replaceTextStyleFont(
-          transaction,
-          markType,
-          runFrom,
-          runTo,
-          currentAttributes,
-          null,
-        ) || changed;
-      }
-      offset = runEnd;
-    }
-  });
-  if (!changed) return false;
-  editor.view.dispatch(transaction.scrollIntoView());
-  return true;
-}
-
 function replaceMathInput({ state, range, latex, type, trailingSpace = false }) {
   const value = String(latex || "").trim();
   if (!value || (type === "inlineMath" && /^\d+(?:[.,]\d+)?$/.test(value))) return;
@@ -611,6 +546,7 @@ export function createEditorExtensions({
     }),
     TextStyle,
     NoteFontFamily,
+    NoteFontIntent,
     FontSize,
     NoteFontSizeStep,
     NoteParagraphLineHeight,
@@ -1198,7 +1134,9 @@ export function formatStateForEditor(editor, painterMode = null) {
       strike: false,
       code: false,
       font: "",
+      fontMixed: false,
       size: "",
+      sizeMixed: false,
       lineHeight: "",
       textAlign: "left",
       textAlignMixed: false,
@@ -1217,7 +1155,7 @@ export function formatStateForEditor(editor, painterMode = null) {
       canAddTableColumn: false,
     };
   }
-  const textStyle = editor.getAttributes("textStyle");
+  const textStyle = selectedTextStyleState(editor.state, fontIntentForEditor(editor));
   const lineHeightAttrs = editor.isActive("heading")
     ? editor.getAttributes("heading")
     : editor.getAttributes("paragraph");
@@ -1246,7 +1184,9 @@ export function formatStateForEditor(editor, painterMode = null) {
     strike: editor.isActive("strike"),
     code: editor.isActive("code"),
     font: fontValueFor(textStyle.fontFamily),
+    fontMixed: textStyle.fontMixed,
     size: sizeValueFor(textStyle.fontSize),
+    sizeMixed: textStyle.sizeMixed,
     lineHeight: LINE_HEIGHT_VALUES.has(lineHeightAttrs.lineHeight) ? lineHeightAttrs.lineHeight : "",
     textAlign: textAlignMixed ? "left" : alignments[0] || "left",
     textAlignMixed,
